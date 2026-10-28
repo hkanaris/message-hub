@@ -1,0 +1,328 @@
+using System.Diagnostics;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+
+namespace MessageHub;
+
+// One app: a slim header (name, unread count, latest message, buttons) over a WebView2.
+public sealed class Pane : Border
+{
+    public const double HeaderHeight = 30;
+    const double Edge = 2;
+
+    static readonly Color HeaderColor = Color.FromRgb(0x25, 0x25, 0x26);
+    static readonly Regex TitleCount = new(@"\((\d+)\+?\)", RegexOptions.Compiled);
+
+    // Sign-in pages stay inside the app as popups; every other new-window link opens in the browser.
+    static readonly string[] SignInHosts =
+    {
+        "login.microsoftonline.com", "login.microsoft.com", "login.live.com",
+        "accounts.google.com", "appleid.apple.com", "okta.com",
+    };
+
+    readonly PaneConfig _config;
+    readonly HubConfig _hub;
+    readonly HubState _state;
+    readonly Color _accent;
+    readonly SolidColorBrush _headerBrush = new(HeaderColor);
+    readonly Border _badge;
+    readonly TextBlock _badgeText;
+    readonly TextBlock _preview;
+    readonly TextBlock _expandButton;
+    bool _pageFocused;
+    bool _hasLatest;
+
+    public WebView2 Web { get; } = new();
+    public string Title => _config.Name;
+    public int Unread { get; private set; }
+    public bool Alerting { get; private set; }
+
+    public event Action<Pane, bool>? Alerted;
+    public event Action<Pane>? ExpandRequested;
+    public event Action? StateChanged;
+
+    public Pane(PaneConfig config, HubConfig hub, HubState state)
+    {
+        _config = config;
+        _hub = hub;
+        _state = state;
+        _accent = ParseColor(config.Color);
+
+        BorderThickness = new Thickness(Edge);
+        BorderBrush = Brushes.Transparent;
+        Margin = new Thickness(0, 0, 0, 1);
+
+        _badgeText = new TextBlock
+        {
+            Foreground = Brushes.White,
+            FontSize = 11,
+            FontWeight = FontWeights.Bold,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _badge = new Border
+        {
+            Background = new SolidColorBrush(_accent),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(6, 0, 6, 1),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+            Child = _badgeText,
+        };
+        _preview = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xC8)),
+            FontSize = 12,
+            Margin = new Thickness(10, 0, 10, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        _expandButton = IconButton("", "Expand (double-click the header)", () => ExpandRequested?.Invoke(this));
+
+        var header = new Grid { Height = HeaderHeight, Background = _headerBrush, Cursor = Cursors.Hand };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var name = new TextBlock
+        {
+            Text = config.Name,
+            Foreground = Brushes.White,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        buttons.Children.Add(IconButton("", "Reload", () => Web.CoreWebView2?.Reload()));
+        buttons.Children.Add(_expandButton);
+
+        AddTo(header, new Border { Background = new SolidColorBrush(_accent) }, 0);
+        AddTo(header, name, 1);
+        AddTo(header, _badge, 2);
+        AddTo(header, _preview, 3);
+        AddTo(header, buttons, 4);
+
+        header.MouseLeftButtonDown += (_, e) =>
+        {
+            if (e.ClickCount == 2) ExpandRequested?.Invoke(this);
+            else OpenLatest();
+        };
+        header.ContextMenu = BuildMenu();
+
+        var layout = new DockPanel();
+        DockPanel.SetDock(header, Dock.Top);
+        layout.Children.Add(header);
+        layout.Children.Add(Web);
+        Child = layout;
+    }
+
+    public async Task InitAsync(CoreWebView2Environment environment, string script)
+    {
+        await Web.EnsureCoreWebView2Async(environment);
+        var core = Web.CoreWebView2;
+        core.Settings.IsStatusBarEnabled = false;
+
+        if (_state.Zoom.TryGetValue(_config.Name, out var zoom)) Web.ZoomFactor = zoom;
+        Web.ZoomFactorChanged += (_, _) => _state.Zoom[_config.Name] = Web.ZoomFactor;
+
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(script);
+        core.WebMessageReceived += OnWebMessage;
+        core.DocumentTitleChanged += (_, _) => UpdateUnread(core.DocumentTitle);
+        core.PermissionRequested += (_, e) =>
+        {
+            if (e.PermissionKind == CoreWebView2PermissionKind.Notifications)
+                e.State = CoreWebView2PermissionState.Allow;
+        };
+        core.NewWindowRequested += OnNewWindow;
+        core.Navigate(_config.Url);
+    }
+
+    public void SetExpanded(bool expanded) => _expandButton.Text = expanded ? "" : "";
+
+    public void ClearAlert()
+    {
+        if (!Alerting) return;
+        Alerting = false;
+        _headerBrush.BeginAnimation(SolidColorBrush.ColorProperty, null);
+        _headerBrush.Color = HeaderColor;
+        BorderBrush = Brushes.Transparent;
+        StateChanged?.Invoke();
+    }
+
+    void OpenLatest()
+    {
+        ClearAlert();
+        if (_hasLatest) _ = Web.ExecuteScriptAsync("window.__hubOpenLast && window.__hubOpenLast()");
+        _hasLatest = false;
+        Web.Focus();
+    }
+
+    void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        string json;
+        try
+        {
+            json = e.TryGetWebMessageAsString();
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        // The page itself can post messages too, so anything malformed is ignored.
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            switch (root.GetProperty("type").GetString())
+            {
+                case "notification":
+                    OnNotification(root.GetProperty("title").GetString() ?? "", root.GetProperty("body").GetString() ?? "");
+                    break;
+                case "focus":
+                    _pageFocused = root.GetProperty("value").GetBoolean();
+                    if (_pageFocused) ClearAlert();
+                    break;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+        }
+    }
+
+    void OnNotification(string title, string body)
+    {
+        var text = string.IsNullOrWhiteSpace(body) ? title : $"{title}: {body}";
+        _preview.Text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        _preview.ToolTip = text;
+        _hasLatest = true;
+
+        var vip = _hub.VipKeywords.Any(k => !string.IsNullOrWhiteSpace(k) && text.Contains(k, StringComparison.OrdinalIgnoreCase));
+        var loud = _config.AlertOn.ToLowerInvariant() switch
+        {
+            "none" => false,
+            "vip" => vip,
+            _ => true,
+        };
+        if (!loud || _pageFocused) return;
+
+        if (!Alerting)
+        {
+            Alerting = true;
+            BorderBrush = new SolidColorBrush(_accent);
+            _headerBrush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation
+            {
+                From = HeaderColor,
+                To = _accent,
+                Duration = TimeSpan.FromMilliseconds(700),
+                AutoReverse = true,
+                RepeatBehavior = RepeatBehavior.Forever,
+            });
+        }
+        Alerted?.Invoke(this, vip);
+        StateChanged?.Invoke();
+    }
+
+    // WhatsApp and Teams put "(3)" in the page title. Slack marks unread with a leading "*" or "!".
+    void UpdateUnread(string title)
+    {
+        var match = TitleCount.Match(title);
+        var count = match.Success ? int.Parse(match.Groups[1].Value)
+            : title.StartsWith('*') || title.StartsWith('!') ? -1
+            : 0;
+        if (count == Unread) return;
+
+        Unread = count;
+        _badge.Visibility = count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        _badgeText.Text = count switch
+        {
+            < 0 => "•",
+            > 99 => "99+",
+            _ => count.ToString(),
+        };
+        StateChanged?.Invoke();
+    }
+
+    void OnNewWindow(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri)) return;
+        if (SignInHosts.Any(h => uri.Host.Equals(h, StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith("." + h, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        e.Handled = true;
+        if (uri.Scheme is "http" or "https" or "mailto")
+            Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+    }
+
+    ContextMenu BuildMenu()
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(Item("Reload", () => Web.CoreWebView2?.Reload()));
+        menu.Items.Add(Item("Expand / restore", () => ExpandRequested?.Invoke(this)));
+        menu.Items.Add(Item("Reset zoom", () => Web.ZoomFactor = 1.0));
+        menu.Items.Add(Item("Open in browser", () =>
+            Process.Start(new ProcessStartInfo(Web.Source?.AbsoluteUri ?? _config.Url) { UseShellExecute = true })));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Edit settings…", MainWindow.OpenSettings));
+        menu.Items.Add(Item("Restart Message Hub", MainWindow.Restart));
+        return menu;
+    }
+
+    static MenuItem Item(string header, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    static TextBlock IconButton(string glyph, string tooltip, Action action)
+    {
+        var button = new TextBlock
+        {
+            Text = glyph,
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            FontSize = 12,
+            Foreground = Brushes.White,
+            Opacity = 0.6,
+            Padding = new Thickness(9, 0, 9, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = tooltip,
+        };
+        button.MouseEnter += (_, _) => button.Opacity = 1;
+        button.MouseLeave += (_, _) => button.Opacity = 0.6;
+        button.MouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            action();
+        };
+        return button;
+    }
+
+    static void AddTo(Grid grid, UIElement element, int column)
+    {
+        Grid.SetColumn(element, column);
+        grid.Children.Add(element);
+    }
+
+    static Color ParseColor(string value)
+    {
+        try
+        {
+            return (Color)ColorConverter.ConvertFromString(value);
+        }
+        catch (Exception)
+        {
+            return Colors.Gray;
+        }
+    }
+}
