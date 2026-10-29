@@ -63,7 +63,16 @@ static class Updater
             }
         }
         File.Move(ExePath, oldPath);
-        File.Move(newPath, ExePath);
+        try
+        {
+            File.Move(newPath, ExePath);
+        }
+        catch
+        {
+            // Put the running version back so there's always a MessageHub.exe to start.
+            File.Move(oldPath, ExePath);
+            throw;
+        }
     }
 
     public static void CleanUp()

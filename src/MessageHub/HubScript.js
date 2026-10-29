@@ -35,7 +35,10 @@
       this.dispatchEvent(event);
     }
 
-    close() { this.__fire('close'); }
+    close() {
+      if (last === this) last = null;
+      this.__fire('close');
+    }
 
     static get permission() { return 'granted'; }
 
@@ -57,6 +60,7 @@
 
   if (window.ServiceWorkerRegistration) {
     ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+      last = null; // nothing to click for these, so don't reopen an older one
       send({ type: 'notification', title: String(title ?? ''), body: String((options && options.body) ?? '') });
       return Promise.resolve();
     };

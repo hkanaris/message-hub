@@ -21,7 +21,8 @@ public sealed class Pane : Border
     const double Edge = 2;
 
     static readonly Color HeaderColor = Color.FromRgb(0x25, 0x25, 0x26);
-    static readonly Regex TitleCount = new(@"\((\d+)\+?\)", RegexOptions.Compiled);
+    // Only a count at the very start of the title, as WhatsApp and Teams write it ("(3) WhatsApp").
+    static readonly Regex TitleCount = new(@"^\s*\((\d{1,6})\+?\)", RegexOptions.Compiled);
 
     // Sign-in pages stay inside the app as popups; every other new-window link opens in the browser.
     static readonly string[] SignInHosts =
@@ -164,7 +165,7 @@ public sealed class Pane : Border
         _countCheck.Tick += (_, _) =>
         {
             _countCheck.Stop();
-            if (_lastNotification < _countRoseAt.AddSeconds(-5) && Unread > 0)
+            if (_config.CountAlerts && _lastNotification < _countRoseAt.AddSeconds(-5) && Unread > 0)
                 OnNotification(Title, "New unread message", test: false, fromCount: true);
         };
     }
@@ -306,7 +307,7 @@ public sealed class Pane : Border
     void UpdateUnread(string title)
     {
         var match = TitleCount.Match(title);
-        var count = match.Success ? int.Parse(match.Groups[1].Value)
+        var count = match.Success && int.TryParse(match.Groups[1].Value, out var parsed) ? parsed
             : title.StartsWith('*') || title.StartsWith('!') ? -1
             : 0;
         if (count == Unread) return;
@@ -371,6 +372,11 @@ public sealed class Pane : Border
             }, _config.AlertOn.Equals(value, StringComparison.OrdinalIgnoreCase)));
         }
         alerts.Items.Add(new Separator());
+        alerts.Items.Add(Item("Also alert when the unread count goes up", () =>
+        {
+            _config.CountAlerts = !_config.CountAlerts;
+            _host.SaveConfig();
+        }, _config.CountAlerts));
         alerts.Items.Add(Item("Send test alert", SendTestAlert));
         menu.Items.Add(alerts);
 

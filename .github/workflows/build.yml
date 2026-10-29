@@ -36,6 +36,10 @@ jobs:
         shell: pwsh
         run: |
           $version = ([xml](Get-Content src/MessageHub/MessageHub.csproj)).Project.PropertyGroup.Version
+          if (git ls-remote --tags origin "refs/tags/v$version") {
+            Write-Error "Release v$version already exists. Bump <Version> in MessageHub.csproj."
+            exit 1
+          }
           "tag=v$version" >> $env:GITHUB_OUTPUT
 
       - name: Publish release

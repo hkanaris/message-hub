@@ -23,13 +23,17 @@ public sealed class PaneConfig
     public bool SplitWithPrevious { get; set; }
     public double Share { get; set; } = 1;
 
+    // Backup alerts when the unread count rises with no notification. Off for mail by default,
+    // where the app's own notification settings decide what matters.
+    public bool CountAlerts { get; set; } = true;
+
     // Null: the shared default profile. Otherwise a separate WebView2 profile with its own sign-ins.
     public string? Profile { get; set; }
 
     // Null: the default sound. "none", a sound from Windows' Media folder, or a .wav file path.
     public string? Sound { get; set; }
 
-    public PaneConfig Copy() => new() { Name = Name, Url = Url, Color = Color, AlertOn = AlertOn };
+    public PaneConfig Copy() => new() { Name = Name, Url = Url, Color = Color, AlertOn = AlertOn, CountAlerts = CountAlerts };
 }
 
 // The apps offered by each pane's "Switch to" and "Add app below" menus.
@@ -43,11 +47,11 @@ public static class AppCatalog
         new() { Name = "Claude", Url = "https://claude.ai", Color = "#D97757" },
         new() { Name = "ChatGPT", Url = "https://chatgpt.com", Color = "#10A37F" },
         new() { Name = "Discord", Url = "https://discord.com/app", Color = "#5865F2" },
-        new() { Name = "Outlook", Url = "https://outlook.office.com/mail/", Color = "#0F78D4" },
+        new() { Name = "Outlook", Url = "https://outlook.office.com/mail/", Color = "#0F78D4", CountAlerts = false },
         new() { Name = "Telegram", Url = "https://web.telegram.org/a/", Color = "#2AABEE" },
         new() { Name = "Messenger", Url = "https://www.messenger.com", Color = "#0084FF" },
         new() { Name = "Google Chat", Url = "https://chat.google.com", Color = "#00AC47" },
-        new() { Name = "Gmail", Url = "https://mail.google.com", Color = "#EA4335" },
+        new() { Name = "Gmail", Url = "https://mail.google.com", Color = "#EA4335", CountAlerts = false },
     };
 
     public static PaneConfig Get(string name) => Apps.First(a => a.Name == name).Copy();
@@ -113,6 +117,24 @@ public sealed class HubConfig
         {
             var config = JsonSerializer.Deserialize<HubConfig>(File.ReadAllText(FilePath), Json);
             if (config == null) return Defaults();
+
+            // Hand edits can leave nulls the defaults would otherwise cover.
+            config.Layouts ??= new();
+            config.VipKeywords ??= new();
+            config.ActiveLayout ??= "";
+            config.Layouts.RemoveAll(l => l == null || l.Panes == null || l.Name == null);
+            foreach (var layout in config.Layouts)
+            {
+                layout.Arrangement ??= "stacked";
+                layout.Panes.RemoveAll(p => p == null || string.IsNullOrWhiteSpace(p.Url));
+                foreach (var pane in layout.Panes)
+                {
+                    pane.Name ??= pane.Url;
+                    pane.Color ??= "#888888";
+                    pane.AlertOn ??= "all";
+                }
+            }
+
             if (config is { Panes.Count: > 0 } && config.Layouts.Count == 0)
             {
                 config.Layouts.Add(new LayoutConfig { Name = "Main", Arrangement = config.Layout ?? "stacked", Panes = config.Panes });
@@ -124,7 +146,7 @@ public sealed class HubConfig
             config.Layouts.RemoveAll(l => l.Panes.Count == 0);
             if (config.Layouts.Count > 0) return config;
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             MessageBox.Show($"config.json couldn't be read, so the defaults are in use.\n\n{ex.Message}", "Message Hub");
         }

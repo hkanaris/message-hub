@@ -56,6 +56,7 @@ public sealed class MainWindow : Window
     DateTime _nextUpdateCheck = DateTime.Now.AddSeconds(20);
     Version? _declinedUpdate;
     bool _updating;
+    bool _checkingForUpdates;
 
     public HubConfig Config => _config;
     public HubState State => _state;
@@ -305,7 +306,20 @@ public sealed class MainWindow : Window
 
     public async Task CheckForUpdatesAsync(bool manual)
     {
-        if (_updating) return;
+        if (_updating || _checkingForUpdates) return;
+        _checkingForUpdates = true;
+        try
+        {
+            await CheckAndInstallAsync(manual);
+        }
+        finally
+        {
+            _checkingForUpdates = false;
+        }
+    }
+
+    async Task CheckAndInstallAsync(bool manual)
+    {
         if (manual) Title = "Message Hub · checking for updates…";
         try
         {
@@ -478,7 +492,10 @@ public sealed class MainWindow : Window
         var index = panes.IndexOf(ConfigOf(pane));
         if (keepOld)
         {
-            panes.Insert(index + 1, app);
+            // After the pane's whole split row, so the row stays together.
+            var end = index + 1;
+            while (end < panes.Count && panes[end].SplitWithPrevious) end++;
+            panes.Insert(end, app);
         }
         else
         {
@@ -563,6 +580,9 @@ public sealed class MainWindow : Window
         var a = panes.IndexOf(enabled[from]);
         var b = panes.IndexOf(enabled[to]);
         (panes[a], panes[b]) = (panes[b], panes[a]);
+
+        // The split flags belong to the slots, so the rows keep their shape and only the apps move.
+        (panes[a].SplitWithPrevious, panes[b].SplitWithPrevious) = (panes[b].SplitWithPrevious, panes[a].SplitWithPrevious);
         Sync();
         SaveConfig();
     }

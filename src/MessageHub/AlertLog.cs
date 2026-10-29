@@ -62,6 +62,8 @@ public sealed class AlertLogWindow : Window
 
         void UpdateEmpty() => empty.Visibility = AlertLog.Entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         UpdateEmpty();
-        AlertLog.Entries.CollectionChanged += (_, _) => UpdateEmpty();
+        void OnChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => UpdateEmpty();
+        AlertLog.Entries.CollectionChanged += OnChanged;
+        Closed += (_, _) => AlertLog.Entries.CollectionChanged -= OnChanged;
     }
 }
