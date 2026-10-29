@@ -12,6 +12,7 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 - **Click a header** to jump to that message and clear the alert.
 - **Layouts:** save different setups and switch between them, e.g. *Main* (Slack, WhatsApp, Teams, Claude stacked) and *Discord + ChatGPT* side by side. In the **⋯** menu, **Layout** lists your layouts; **New layout…** asks for a name, arrangement, number of apps and which apps. Rename and delete are there too. Apps in every layout keep running, so ones that aren't showing still alert: a red bar at the top says where, and clicking it takes you there.
 - **Arrange:** **Stacked**, **Side by side** or **Grid**, and 2–6 apps, for the layout you're in.
+- **Split:** **Split with** puts another app beside a pane in the same row (in the same column when side by side), with a divider between them. **Unsplit** gives a pane its own row again.
 - **Resize:** drag the divider between two panes (stacked and side by side). Sizes are remembered.
 - **Double-click a header** (or the expand button) to give that pane the whole window. The others shrink to their headers but keep alerting.
 - **Ctrl+1–9** expands a pane, **Ctrl+0** restores.

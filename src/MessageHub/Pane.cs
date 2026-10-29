@@ -305,6 +305,8 @@ public sealed class Pane : Border
         menu.Items.Clear();
         menu.Items.Add(AppMenu("Switch to", app => SwitchRequested?.Invoke(this, app)));
         menu.Items.Add(AppMenu("Add app below", app => AddRequested?.Invoke(this, app)));
+        menu.Items.Add(AppMenu("Split with", app => _host.SplitPane(this, app)));
+        if (_config.SplitWithPrevious) menu.Items.Add(Item("Unsplit (own row)", () => _host.Unsplit(this)));
         menu.Items.Add(Item("Move up", () => MoveRequested?.Invoke(this, -1)));
         menu.Items.Add(Item("Move down", () => MoveRequested?.Invoke(this, 1)));
         menu.Items.Add(Item("Remove", () => RemoveRequested?.Invoke(this)));

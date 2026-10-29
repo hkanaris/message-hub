@@ -19,6 +19,10 @@ public sealed class PaneConfig
     // The pane's share of the window height, set by dragging the dividers.
     public double Size { get; set; } = 1;
 
+    // True: shares the previous pane's row (its column when side by side), with Share as its part of it.
+    public bool SplitWithPrevious { get; set; }
+    public double Share { get; set; } = 1;
+
     // Null: the default sound. "none", a sound from Windows' Media folder, or a .wav file path.
     public string? Sound { get; set; }
 

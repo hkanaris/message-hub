@@ -43,6 +43,9 @@ public sealed class MainWindow : Window
     readonly List<Pane> _panes = new();
     readonly Dictionary<Pane, PopOutWindow> _poppedOut = new();
 
+    // Grids holding split rows, keyed by their panes, reused so those panes stay put.
+    readonly Dictionary<string, Grid> _splitGrids = new();
+
     readonly TaskCompletionSource<CoreWebView2Environment> _environment = new();
     readonly string _script = ReadScript();
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
@@ -288,7 +291,7 @@ public sealed class MainWindow : Window
         }
 
         if (_expanded == pane) _expanded = null;
-        _grid.Children.Remove(pane);
+        Detach(pane);
         var window = new PopOutWindow(pane);
         window.Returned += w =>
         {
@@ -416,7 +419,7 @@ public sealed class MainWindow : Window
         {
             _pool.Remove(key);
             if (_poppedOut.Remove(pane, out var window)) window.CloseQuietly();
-            _grid.Children.Remove(pane);
+            Detach(pane);
             pane.Close();
         }
 
@@ -469,9 +472,32 @@ public sealed class MainWindow : Window
         else
         {
             app.Size = panes[index].Size;
+            app.Share = panes[index].Share;
+            app.SplitWithPrevious = panes[index].SplitWithPrevious;
             panes[index] = app;
         }
         Sync();
+        SaveConfig();
+    }
+
+    // Puts a new app beside the pane, sharing its row (or column, when side by side).
+    public void SplitPane(Pane pane, PaneConfig? app)
+    {
+        if (!_panes.Contains(pane)) return;
+        app ??= CustomAppDialog.Ask(this);
+        if (app == null) return;
+
+        var panes = _config.Current.Panes;
+        app.SplitWithPrevious = true;
+        panes.Insert(panes.IndexOf(ConfigOf(pane)) + 1, app);
+        Sync();
+        SaveConfig();
+    }
+
+    public void Unsplit(Pane pane)
+    {
+        pane.Config.SplitWithPrevious = false;
+        Arrange();
         SaveConfig();
     }
 
@@ -493,7 +519,13 @@ public sealed class MainWindow : Window
     void RemovePane(Pane pane)
     {
         if (_panes.Count == 1 || !_panes.Contains(pane)) return;
-        _config.Current.Panes.Remove(ConfigOf(pane));
+        var panes = _config.Current.Panes;
+        var config = ConfigOf(pane);
+        var next = panes.IndexOf(config) + 1;
+
+        // Removing the first pane of a split row leaves the next one heading that row.
+        if (!config.SplitWithPrevious && next < panes.Count) panes[next].SplitWithPrevious = false;
+        panes.Remove(config);
         Sync();
         SaveConfig();
     }
@@ -528,7 +560,8 @@ public sealed class MainWindow : Window
         Arrange();
     }
 
-    // Stacked and side-by-side layouts get a draggable divider between each pair of panes.
+    // Stacked and side-by-side layouts get a draggable divider between each pair of panes. A pane
+    // split with the one before it shares that pane's row (or column), with its own divider.
     // With a pane expanded, the layout is always stacked and the others keep just their headers.
     // Panes from other layouts sit in a zero-height row so they keep running unseen.
     void Arrange()
@@ -544,50 +577,107 @@ public sealed class MainWindow : Window
         _grid.ColumnDefinitions.Clear();
         foreach (var pane in _panes) pane.SetExpanded(pane == _expanded);
 
+        var used = new HashSet<Grid>();
         var arrangement = _expanded != null ? "stacked" : _config.Current.Arrangement.ToLowerInvariant();
         if (arrangement == "grid") ArrangeGrid(shown);
-        else ArrangeLine(shown, columns: arrangement == "side-by-side");
+        else ArrangeLine(shown, columns: arrangement == "side-by-side", used);
+
+        foreach (var (key, split) in _splitGrids.Where(e => !used.Contains(e.Value)).ToList())
+        {
+            _splitGrids.Remove(key);
+            split.Children.Clear();
+            _grid.Children.Remove(split);
+        }
 
         if (parked.Count == 0) return;
-        if (_grid.RowDefinitions.Count == 0) AddTrack(false, new GridLength(1, GridUnitType.Star));
+        if (_grid.RowDefinitions.Count == 0) AddTrack(_grid, false, new GridLength(1, GridUnitType.Star));
         var row = _grid.RowDefinitions.Count;
-        AddTrack(false, new GridLength(0));
+        AddTrack(_grid, false, new GridLength(0));
         foreach (var pane in parked)
         {
-            Place(pane, row, 0);
+            Place(_grid, pane, row, 0);
             Grid.SetColumnSpan(pane, Math.Max(1, _grid.ColumnDefinitions.Count));
         }
     }
 
-    void ArrangeLine(List<Pane> shown, bool columns)
+    // Groups panes that share a row: each pane split with the one before joins its group.
+    List<List<Pane>> Groups(List<Pane> shown)
     {
-        for (var i = 0; i < shown.Count; i++)
+        var groups = new List<List<Pane>>();
+        foreach (var pane in shown)
         {
-            var pane = shown[i];
-            var collapsed = _expanded != null && pane != _expanded;
-            var size = _expanded == null ? Math.Max(pane.Config.Size, 0.1) : 1;
-            AddTrack(columns, collapsed ? new GridLength(Pane.HeaderHeight + 4) : new GridLength(size, GridUnitType.Star));
-            Place(pane, columns ? 0 : i * 2, columns ? i * 2 : 0);
+            if (pane.Config.SplitWithPrevious && groups.Count > 0 && _expanded == null) groups[^1].Add(pane);
+            else groups.Add(new List<Pane> { pane });
+        }
+        return groups;
+    }
 
-            if (i == shown.Count - 1) break;
+    void ArrangeLine(List<Pane> shown, bool columns, HashSet<Grid> used)
+    {
+        var groups = Groups(shown);
+        var cells = new List<UIElement>();
+        for (var i = 0; i < groups.Count; i++)
+        {
+            var group = groups[i];
+            var collapsed = _expanded != null && group[0] != _expanded;
+            var size = _expanded == null ? Math.Max(group[0].Config.Size, 0.1) : 1;
+            AddTrack(_grid, columns, collapsed ? new GridLength(Pane.HeaderHeight + 4) : new GridLength(size, GridUnitType.Star));
 
-            AddTrack(columns, new GridLength(_expanded == null ? 5 : 1));
+            UIElement cell = group.Count == 1 ? group[0] : SplitGrid(group, across: !columns, used);
+            cells.Add(cell);
+            Place(_grid, cell, columns ? 0 : i * 2, columns ? i * 2 : 0);
+
+            if (i == groups.Count - 1) break;
+
+            AddTrack(_grid, columns, new GridLength(_expanded == null ? 5 : 1));
             if (_expanded != null) continue;
 
-            var divider = new GridSplitter
-            {
-                ResizeDirection = columns ? GridResizeDirection.Columns : GridResizeDirection.Rows,
-                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Stretch,
-                Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3C)),
-                ShowsPreview = false,
-                ToolTip = "Drag to resize",
-            };
-            divider.DragCompleted += (_, _) => SaveSizes(shown, columns);
-            Place(divider, columns ? 0 : i * 2 + 1, columns ? i * 2 + 1 : 0);
+            var divider = Divider(columns);
+            divider.DragCompleted += (_, _) => SaveSizes(groups, cells, columns);
+            Place(_grid, divider, columns ? 0 : i * 2 + 1, columns ? i * 2 + 1 : 0);
         }
     }
+
+    // The panes of one split row (or column) side by side in their own grid. The grid is kept
+    // between arranges so its panes aren't moved, which would reload them.
+    Grid SplitGrid(List<Pane> group, bool across, HashSet<Grid> used)
+    {
+        var key = string.Join("|", group.Select(p => p.Key)) + (across ? "|across" : "|down");
+        if (!_splitGrids.TryGetValue(key, out var split))
+        {
+            split = new Grid();
+            _splitGrids[key] = split;
+        }
+        used.Add(split);
+
+        foreach (var divider in split.Children.OfType<GridSplitter>().ToList()) split.Children.Remove(divider);
+        split.RowDefinitions.Clear();
+        split.ColumnDefinitions.Clear();
+
+        for (var j = 0; j < group.Count; j++)
+        {
+            AddTrack(split, across, new GridLength(Math.Max(group[j].Config.Share, 0.1), GridUnitType.Star));
+            Place(split, group[j], across ? 0 : j * 2, across ? j * 2 : 0);
+            if (j == group.Count - 1) break;
+
+            AddTrack(split, across, new GridLength(5));
+            var divider = Divider(across);
+            divider.DragCompleted += (_, _) => SaveShares(group, split, across);
+            Place(split, divider, across ? 0 : j * 2 + 1, across ? j * 2 + 1 : 0);
+        }
+        return split;
+    }
+
+    static GridSplitter Divider(bool columns) => new()
+    {
+        ResizeDirection = columns ? GridResizeDirection.Columns : GridResizeDirection.Rows,
+        ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        VerticalAlignment = VerticalAlignment.Stretch,
+        Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3C)),
+        ShowsPreview = false,
+        ToolTip = "Drag to resize",
+    };
 
     // As square as possible: 4 apps make 2×2, 6 make 3×2. A short last row is stretched to fill.
     void ArrangeGrid(List<Pane> shown)
@@ -595,42 +685,63 @@ public sealed class MainWindow : Window
         if (shown.Count == 0) return;
         var columns = (int)Math.Ceiling(Math.Sqrt(shown.Count));
         var rows = (int)Math.Ceiling(shown.Count / (double)columns);
-        for (var c = 0; c < columns; c++) AddTrack(true, new GridLength(1, GridUnitType.Star));
-        for (var r = 0; r < rows; r++) AddTrack(false, new GridLength(1, GridUnitType.Star));
+        for (var c = 0; c < columns; c++) AddTrack(_grid, true, new GridLength(1, GridUnitType.Star));
+        for (var r = 0; r < rows; r++) AddTrack(_grid, false, new GridLength(1, GridUnitType.Star));
 
         for (var i = 0; i < shown.Count; i++)
         {
-            Place(shown[i], i / columns, i % columns);
+            Place(_grid, shown[i], i / columns, i % columns);
             if (i == shown.Count - 1) Grid.SetColumnSpan(shown[i], columns - i % columns);
         }
     }
 
-    void AddTrack(bool column, GridLength length)
+    static void AddTrack(Grid grid, bool column, GridLength length)
     {
-        if (column) _grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
-        else _grid.RowDefinitions.Add(new RowDefinition { Height = length });
+        if (column) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = length });
+        else grid.RowDefinitions.Add(new RowDefinition { Height = length });
     }
 
-    void Place(UIElement element, int row, int column)
+    // Moves the element into the grid if it's somewhere else, then sets its cell.
+    static void Place(Grid grid, UIElement element, int row, int column)
     {
+        if (element is FrameworkElement { Parent: Panel other } && other != grid) other.Children.Remove(element);
         Grid.SetRow(element, row);
         Grid.SetColumn(element, column);
         Grid.SetRowSpan(element, 1);
         Grid.SetColumnSpan(element, 1);
-        if (!_grid.Children.Contains(element)) _grid.Children.Add(element);
+        if (!grid.Children.Contains(element)) grid.Children.Add(element);
     }
 
-    void SaveSizes(List<Pane> shown, bool columns)
+    static void Detach(UIElement element)
     {
-        double Length(Pane p) => columns
-            ? _grid.ColumnDefinitions[Grid.GetColumn(p)].ActualWidth
-            : _grid.RowDefinitions[Grid.GetRow(p)].ActualHeight;
+        if (element is FrameworkElement { Parent: Panel panel }) panel.Children.Remove(element);
+    }
 
-        var total = shown.Sum(Length);
+    void SaveSizes(List<List<Pane>> groups, List<UIElement> cells, bool columns)
+    {
+        double Length(UIElement cell) => columns
+            ? _grid.ColumnDefinitions[Grid.GetColumn(cell)].ActualWidth
+            : _grid.RowDefinitions[Grid.GetRow(cell)].ActualHeight;
+
+        var total = cells.Sum(Length);
         if (total <= 0) return;
 
-        foreach (var pane in shown)
-            pane.Config.Size = Math.Round(Length(pane) / total * shown.Count, 3);
+        for (var i = 0; i < groups.Count; i++)
+            groups[i][0].Config.Size = Math.Round(Length(cells[i]) / total * groups.Count, 3);
+        SaveConfig();
+    }
+
+    void SaveShares(List<Pane> group, Grid split, bool across)
+    {
+        double Length(Pane p) => across
+            ? split.ColumnDefinitions[Grid.GetColumn(p)].ActualWidth
+            : split.RowDefinitions[Grid.GetRow(p)].ActualHeight;
+
+        var total = group.Sum(Length);
+        if (total <= 0) return;
+
+        foreach (var pane in group)
+            pane.Config.Share = Math.Round(Length(pane) / total * group.Count, 3);
         SaveConfig();
     }
 
