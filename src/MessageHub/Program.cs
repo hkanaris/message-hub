@@ -26,7 +26,8 @@ public static class Program
             return;
         }
 
-        var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        // Windows 11 Fluent styling for menus, dialogs and controls, always dark to match the panes.
+        var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose, ThemeMode = ThemeMode.Dark };
         app.Run(new MainWindow(HubConfig.Load(), HubState.Load()));
         mutex.ReleaseMutex();
     }

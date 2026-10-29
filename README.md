@@ -61,4 +61,4 @@ Which messages trigger a notification is still each app's own setting (Slack's n
 
 ## Build
 
-Every push builds `MessageHub.exe` with GitHub Actions. A push to `main` also publishes it as release `v<Version>`, taken from `MessageHub.csproj`, so bump `<Version>` with each change. Locally: `dotnet publish src/MessageHub -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true` (.NET 8 SDK).
+Every push builds `MessageHub.exe` with GitHub Actions. A push to `main` also publishes it as release `v<Version>`, taken from `MessageHub.csproj`, so bump `<Version>` with each change. Locally: `dotnet publish src/MessageHub -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true` (.NET 10 SDK).
