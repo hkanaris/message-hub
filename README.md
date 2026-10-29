@@ -4,7 +4,7 @@ Slack, WhatsApp, Teams and Claude stacked in one window, with alerts you can't m
 
 ## Get it
 
-Download `MessageHub.exe` from the latest release (or from the latest **Build** run under Actions) and run it. Nothing to install: it uses the WebView2 runtime that ships with Windows 11. Sign in to each app once; logins are kept.
+Download `MessageHub.exe` from [the latest release](../../releases/latest), unblock it (right-click, **Properties**, tick **Unblock**) and run it. Nothing to install: it uses the WebView2 runtime that ships with Windows 11. Sign in to each app once; logins are kept.
 
 ## Using it
 
@@ -48,4 +48,4 @@ Which messages trigger a notification is still each app's own setting (Slack's n
 
 ## Build
 
-Pushes build `MessageHub.exe` with GitHub Actions. Tag `v*` to publish a release. Locally: `dotnet publish src/MessageHub -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true` (.NET 8 SDK).
+Every push builds `MessageHub.exe` with GitHub Actions. A push to `main` also publishes it as release `v<Version>`, taken from `MessageHub.csproj`, so bump `<Version>` with each change. Locally: `dotnet publish src/MessageHub -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true` (.NET 8 SDK).
