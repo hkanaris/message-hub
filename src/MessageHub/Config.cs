@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows;
 
 namespace MessageHub;
@@ -42,17 +43,36 @@ public static class AppCatalog
     public static PaneConfig Get(string name) => Apps.First(a => a.Name == name).Copy();
 }
 
-// config.json can be edited by hand. The app rewrites it when panes are changed from a pane's menu.
+// A saved set of apps and how they're arranged. The hub shows one layout at a time.
+public sealed class LayoutConfig
+{
+    public string Name { get; set; } = "";
+
+    // "stacked" (top to bottom), "side-by-side" or "grid".
+    public string Arrangement { get; set; } = "stacked";
+    public List<PaneConfig> Panes { get; set; } = new();
+}
+
+// config.json can be edited by hand while Message Hub is closed. The app rewrites it whenever
+// something is changed from a pane's menu.
 public sealed class HubConfig
 {
-    public List<PaneConfig> Panes { get; set; } = new();
+    public List<LayoutConfig> Layouts { get; set; } = new();
+    public string ActiveLayout { get; set; } = "";
     public List<string> VipKeywords { get; set; } = new();
     public bool Sound { get; set; } = true;
     public bool FlashTaskbar { get; set; } = true;
     public bool ExpandOnVip { get; set; } = false;
 
-    // "stacked" (top to bottom), "side-by-side" or "grid".
-    public string Layout { get; set; } = "stacked";
+    // Versions before 0.4 kept a single set of panes here. Read once, then moved into Layouts.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PaneConfig>? Panes { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Layout { get; set; }
+
+    [JsonIgnore]
+    public LayoutConfig Current => Layouts.FirstOrDefault(l => l.Name == ActiveLayout) ?? Layouts[0];
 
     public static string Folder { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MessageHub");
@@ -81,7 +101,17 @@ public sealed class HubConfig
         try
         {
             var config = JsonSerializer.Deserialize<HubConfig>(File.ReadAllText(FilePath), Json);
-            if (config is { Panes.Count: > 0 }) return config;
+            if (config == null) return Defaults();
+            if (config is { Panes.Count: > 0 } && config.Layouts.Count == 0)
+            {
+                config.Layouts.Add(new LayoutConfig { Name = "Main", Arrangement = config.Layout ?? "stacked", Panes = config.Panes });
+                config.Layouts.Add(DiscordAndChatGpt());
+                config.ActiveLayout = "Main";
+            }
+            config.Panes = null;
+            config.Layout = null;
+            config.Layouts.RemoveAll(l => l.Panes.Count == 0);
+            if (config.Layouts.Count > 0) return config;
         }
         catch (JsonException ex)
         {
@@ -99,13 +129,29 @@ public sealed class HubConfig
 
     static HubConfig Defaults() => new()
     {
-        Panes =
+        ActiveLayout = "Main",
+        Layouts =
         {
-            AppCatalog.Get("Slack"),
-            AppCatalog.Get("WhatsApp"),
-            AppCatalog.Get("Teams"),
-            AppCatalog.Get("Claude"),
+            new LayoutConfig
+            {
+                Name = "Main",
+                Panes =
+                {
+                    AppCatalog.Get("Slack"),
+                    AppCatalog.Get("WhatsApp"),
+                    AppCatalog.Get("Teams"),
+                    AppCatalog.Get("Claude"),
+                },
+            },
+            DiscordAndChatGpt(),
         },
+    };
+
+    static LayoutConfig DiscordAndChatGpt() => new()
+    {
+        Name = "Discord + ChatGPT",
+        Arrangement = "side-by-side",
+        Panes = { AppCatalog.Get("Discord"), AppCatalog.Get("ChatGPT") },
     };
 }
 

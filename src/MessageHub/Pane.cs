@@ -317,16 +317,30 @@ public sealed class Pane : Border
         dnd.Items.Add(off);
         menu.Items.Add(dnd);
 
-        var layout = new MenuItem { Header = "Layout" };
-        foreach (var (label, value) in new[] { ("Stacked", "stacked"), ("Side by side", "side-by-side"), ("Grid", "grid") })
-            layout.Items.Add(Item(label, () => _host.SetLayout(value), _hub.Layout.Equals(value, StringComparison.OrdinalIgnoreCase)));
-        layout.Items.Add(new Separator());
-        for (var count = 2; count <= 6; count++)
+        var layouts = new MenuItem { Header = $"Layout: {_hub.Current.Name}" };
+        foreach (var saved in _hub.Layouts)
+        {
+            var target = saved;
+            layouts.Items.Add(Item(saved.Name, () => _host.SwitchLayout(target), saved == _hub.Current));
+        }
+        layouts.Items.Add(new Separator());
+        layouts.Items.Add(Item("New layout…", _host.NewLayout));
+        layouts.Items.Add(Item("Rename this layout…", _host.RenameLayout));
+        var delete = Item("Delete this layout", _host.DeleteLayout);
+        delete.IsEnabled = _hub.Layouts.Count > 1;
+        layouts.Items.Add(delete);
+        menu.Items.Add(layouts);
+
+        var arrange = new MenuItem { Header = "Arrange" };
+        foreach (var (label, value) in LayoutChoices.Arrangements)
+            arrange.Items.Add(Item(label, () => _host.SetArrangement(value), _hub.Current.Arrangement.Equals(value, StringComparison.OrdinalIgnoreCase)));
+        arrange.Items.Add(new Separator());
+        for (var count = LayoutChoices.MinApps; count <= LayoutChoices.MaxApps; count++)
         {
             var n = count;
-            layout.Items.Add(Item($"{n} apps", () => _host.SetPaneCount(n), _host.PaneCount == n));
+            arrange.Items.Add(Item($"{n} apps", () => _host.SetPaneCount(n), _host.PaneCount == n));
         }
-        menu.Items.Add(layout);
+        menu.Items.Add(arrange);
 
         var settings = new MenuItem { Header = "Settings" };
         settings.Items.Add(Item("VIP list…", _host.EditVipList));

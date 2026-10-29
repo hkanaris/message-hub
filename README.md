@@ -10,7 +10,8 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 
 - **New message:** the pane's header pulses in the app's colour, shows the message, the taskbar button flashes and a sound plays.
 - **Click a header** to jump to that message and clear the alert.
-- **Layout:** in the **⋯** menu, **Layout** switches between **Stacked**, **Side by side** and **Grid**, and sets how many apps to show (2–6).
+- **Layouts:** save different setups and switch between them, e.g. *Main* (Slack, WhatsApp, Teams, Claude stacked) and *Discord + ChatGPT* side by side. In the **⋯** menu, **Layout** lists your layouts; **New layout…** asks for a name, arrangement, number of apps and which apps. Rename and delete are there too. Apps in layouts that aren't showing don't alert.
+- **Arrange:** **Stacked**, **Side by side** or **Grid**, and 2–6 apps, for the layout you're in.
 - **Resize:** drag the divider between two panes (stacked and side by side). Sizes are remembered.
 - **Double-click a header** (or the expand button) to give that pane the whole window. The others shrink to their headers but keep alerting.
 - **Ctrl+1–9** expands a pane, **Ctrl+0** restores.
@@ -31,17 +32,23 @@ Everything below can be set from the **⋯** menu. It's stored in `%APPDATA%\Mes
 
 ```json
 {
-  "panes": [
-    { "name": "Slack", "url": "https://app.slack.com/client", "color": "#E01E5A", "alertOn": "all" },
-    { "name": "WhatsApp", "url": "https://web.whatsapp.com", "color": "#25D366", "alertOn": "vip" },
-    { "name": "Teams", "url": "https://teams.microsoft.com", "color": "#7B83EB", "alertOn": "all" },
-    { "name": "Claude", "url": "https://claude.ai", "color": "#D97757", "alertOn": "all" }
+  "layouts": [
+    {
+      "name": "Main",
+      "arrangement": "stacked",
+      "panes": [
+        { "name": "Slack", "url": "https://app.slack.com/client", "color": "#E01E5A", "alertOn": "all" },
+        { "name": "WhatsApp", "url": "https://web.whatsapp.com", "color": "#25D366", "alertOn": "vip" },
+        { "name": "Teams", "url": "https://teams.microsoft.com", "color": "#7B83EB", "alertOn": "all" },
+        { "name": "Claude", "url": "https://claude.ai", "color": "#D97757", "alertOn": "all" }
+      ]
+    }
   ],
+  "activeLayout": "Main",
   "vipKeywords": ["Stuart", "Directors", "incident-management"],
   "sound": true,
   "flashTaskbar": true,
-  "expandOnVip": false,
-  "layout": "stacked"
+  "expandOnVip": false
 }
 ```
 

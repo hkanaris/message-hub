@@ -25,7 +25,7 @@ public sealed class MainWindow : Window
     readonly HubState _state;
     readonly Grid _grid = new();
     readonly List<Pane> _panes = new();
-    readonly List<PaneConfig> _hidden;
+    List<PaneConfig> _hidden = new();
     readonly TaskCompletionSource<CoreWebView2Environment> _environment = new();
     readonly string _script = ReadScript();
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
@@ -56,10 +56,7 @@ public sealed class MainWindow : Window
         Content = _grid;
         ApplySavedBounds(state);
 
-        _hidden = config.Panes.Where(p => !p.Enabled).ToList();
-        foreach (var paneConfig in config.Panes.Where(p => p.Enabled))
-            _panes.Add(CreatePane(paneConfig));
-        Arrange();
+        ShowLayout(config.Current);
 
         Loaded += async (_, _) => await LoadPanesAsync();
         Closing += OnClosing;
@@ -111,11 +108,66 @@ public sealed class MainWindow : Window
         SaveConfig();
     }
 
-    public void SetLayout(string layout)
+    public void SetArrangement(string arrangement)
     {
-        _config.Layout = layout;
+        _config.Current.Arrangement = arrangement;
         Arrange();
         SaveConfig();
+    }
+
+    public void SwitchLayout(LayoutConfig layout, bool reload = false)
+    {
+        if (layout == _config.Current && !reload) return;
+        _config.ActiveLayout = layout.Name;
+        foreach (var pane in _panes) pane.Close();
+        ShowLayout(layout);
+        SaveConfig();
+        UpdateTaskbar();
+        foreach (var pane in _panes.ToList()) _ = StartPaneAsync(pane);
+    }
+
+    public void NewLayout()
+    {
+        var layout = NewLayoutDialog.Ask(this, _config.Layouts.Select(l => l.Name));
+        if (layout == null) return;
+        _config.Layouts.Add(layout);
+        SwitchLayout(layout);
+    }
+
+    public void RenameLayout()
+    {
+        var current = _config.Current;
+        var name = PromptDialog.Ask(this, "Rename layout", "Name", current.Name);
+        if (string.IsNullOrWhiteSpace(name) || name == current.Name) return;
+        if (_config.Layouts.Any(l => l.Name == name))
+        {
+            MessageBox.Show(this, $"There's already a layout called {name}.", "Message Hub");
+            return;
+        }
+        current.Name = name;
+        _config.ActiveLayout = name;
+        SaveConfig();
+    }
+
+    public void DeleteLayout()
+    {
+        if (_config.Layouts.Count == 1) return;
+        var current = _config.Current;
+        if (MessageBox.Show(this, $"Delete the {current.Name} layout?", "Message Hub", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
+            return;
+        _config.Layouts.Remove(current);
+        SwitchLayout(_config.Layouts[0], reload: true);
+    }
+
+    // Replaces the panes on screen with the layout's. Callers close the old panes and start the new ones.
+    void ShowLayout(LayoutConfig layout)
+    {
+        _panes.Clear();
+        _expanded = null;
+        _hidden = layout.Panes.Where(p => !p.Enabled).ToList();
+        foreach (var paneConfig in layout.Panes.Where(p => p.Enabled))
+            _panes.Add(CreatePane(paneConfig));
+        Arrange();
     }
 
     // Adds apps not already showing, or removes panes from the end, to reach the count.
@@ -287,7 +339,7 @@ public sealed class MainWindow : Window
 
     public void SaveConfig()
     {
-        _config.Panes = _panes.Select(p => p.Config).Concat(_hidden).ToList();
+        _config.Current.Panes = _panes.Select(p => p.Config).Concat(_hidden).ToList();
         try
         {
             _config.Save();
@@ -323,7 +375,7 @@ public sealed class MainWindow : Window
         _grid.ColumnDefinitions.Clear();
         foreach (var pane in _panes) pane.SetExpanded(pane == _expanded);
 
-        var layout = _expanded != null ? "stacked" : _config.Layout.ToLowerInvariant();
+        var layout = _expanded != null ? "stacked" : _config.Current.Arrangement.ToLowerInvariant();
         if (layout == "grid") ArrangeGrid();
         else ArrangeLine(columns: layout == "side-by-side");
     }
