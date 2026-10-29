@@ -335,7 +335,6 @@ public sealed class Pane : Border
         settings.Items.Add(Toggle("Expand pane for VIP messages", () => _hub.ExpandOnVip, v => _hub.ExpandOnVip = v));
         settings.Items.Add(new Separator());
         settings.Items.Add(Item("Check for updates", () => _ = _host.CheckForUpdatesAsync(manual: true)));
-        settings.Items.Add(Item("Edit config file…", MainWindow.OpenSettings));
         settings.Items.Add(Item("Restart Message Hub", MainWindow.Restart));
         menu.Items.Add(settings);
         menu.Items.Add(new Separator());

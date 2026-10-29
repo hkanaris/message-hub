@@ -13,10 +13,10 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 - **Layout:** in the **⋯** menu, **Layout** switches between **Stacked**, **Side by side** and **Grid**, and sets how many apps to show (2–6).
 - **Resize:** drag the divider between two panes (stacked and side by side). Sizes are remembered.
 - **Double-click a header** (or the expand button) to give that pane the whole window. The others shrink to their headers but keep alerting.
-- **Ctrl+1–9** expands a pane, **Ctrl+0** restores, **Ctrl+,** opens settings.
+- **Ctrl+1–9** expands a pane, **Ctrl+0** restores.
 - **Ctrl+mouse wheel** zooms a pane; the zoom is remembered.
 - **Swap apps:** click a header's **⋯** button (or right-click the header). **Switch to** replaces the pane with another app, **Add app below** adds a new pane, and there's **Move up**, **Move down** and **Remove**. Built in: Slack, WhatsApp, Teams, Claude, ChatGPT, Discord, Outlook, Telegram, Messenger, Google Chat and Gmail. **Custom…** takes any web address. Changes apply at once and are saved.
-- **Alerts for <app>:** All messages, VIP only, or Off.
+- **Alerts for (app):** All messages, VIP only, or Off.
 - **Do not disturb:** 30 minutes, 1 hour or until you turn it off. The taskbar shows a grey "z" while it's on.
 - **Settings:** edit the VIP list, turn sound, taskbar flashing and expand-on-VIP on or off, check for updates.
 - **Updates:** Message Hub checks for a new release shortly after starting and every 6 hours, and offers to update itself.
@@ -27,7 +27,7 @@ Close the desktop Slack, WhatsApp and Teams apps, or you'll get every notificati
 
 ## Settings
 
-Everything below can be set from the **⋯** menu. It's stored in `%APPDATA%\MessageHub\config.json`, which can also be edited by hand (then restart from **Settings**).
+Everything below can be set from the **⋯** menu. It's stored in `%APPDATA%\MessageHub\config.json`, which you can also edit by hand while Message Hub is closed.
 
 ```json
 {

@@ -181,9 +181,6 @@ public sealed class MainWindow : Window
         }
     }
 
-    public static void OpenSettings() =>
-        Process.Start(new ProcessStartInfo("notepad.exe", $"\"{HubConfig.FilePath}\"") { UseShellExecute = true });
-
     public static void Restart()
     {
         Process.Start(new ProcessStartInfo(Environment.ProcessPath!, "--restart") { UseShellExecute = false });
@@ -418,7 +415,7 @@ public sealed class MainWindow : Window
         if (vip && _config.ExpandOnVip && _expanded != pane) ToggleExpand(pane);
     }
 
-    // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back, Ctrl+, opens settings.
+    // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back.
     void OnKey(object sender, KeyEventArgs e)
     {
         if (Keyboard.Modifiers != ModifierKeys.Control) return;
@@ -431,11 +428,6 @@ public sealed class MainWindow : Window
         else if (e.Key == Key.D0 && _expanded != null)
         {
             ToggleExpand(_expanded);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.OemComma)
-        {
-            OpenSettings();
             e.Handled = true;
         }
     }
