@@ -11,11 +11,12 @@ static class Updater
 {
     const string LatestRelease = "https://api.github.com/repos/hkanaris/message-hub/releases/latest";
 
-    static readonly HttpClient Http = CreateClient();
-
     public sealed record Release(Version Version, string Tag, string DownloadUrl);
 
+    // Static initialisers run in order: Current must be set before CreateClient uses it.
     public static Version Current { get; } = Normalise(Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0));
+
+    static readonly HttpClient Http = CreateClient();
 
     static string ExePath => Environment.ProcessPath!;
 
