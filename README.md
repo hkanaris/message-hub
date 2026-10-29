@@ -23,6 +23,8 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 - **Settings:** edit the VIP list, turn sound, taskbar flashing and expand-on-VIP on or off, check for updates.
 - **Updates:** Message Hub checks for a new release shortly after starting and every 6 hours, and offers to update itself.
 - **Sound for (app):** pick a different sound per app (Windows' notification sounds, none, or your own .wav).
+- **Sign-in profile:** put a pane on its own profile (**New profile…**) to sign in to a second account, e.g. 4way Teams in one pane and another tenant's Teams in another. Panes on the same profile share sign-ins.
+- **Backup alerts:** if an app's unread count goes up but no notification arrives within a few seconds, the pane alerts anyway ("unread count went up" in Recent alerts).
 - **Pop out to its own window:** move a pane to another monitor. Close that window to put it back.
 - **Closing:** closing the window minimises it to the taskbar so it keeps alerting; while minimised, alerts also arrive as Windows notifications. Quit from the tray icon (right-click) or **Settings → Quit Message Hub**. **Settings → Start with Windows** starts it minimised when you sign in.
 - **Checking alerts work:** **Alerts → Send test alert** sends one through the app's own notification path. **Settings → Recent alerts…** lists every notification each app sent and what Message Hub did with it (alerted, or why it stayed quiet).

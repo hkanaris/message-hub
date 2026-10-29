@@ -405,9 +405,9 @@ public sealed class MainWindow : Window
         var seen = new Dictionary<string, int>();
         foreach (var config in layout.Panes.Where(p => p.Enabled))
         {
-            var url = config.Url.Trim().TrimEnd('/').ToLowerInvariant();
-            seen[url] = seen.GetValueOrDefault(url) + 1;
-            yield return ($"{url}#{seen[url]}", config);
+            var app = $"{config.Url.Trim().TrimEnd('/').ToLowerInvariant()}|{config.Profile}";
+            seen[app] = seen.GetValueOrDefault(app) + 1;
+            yield return ($"{app}#{seen[app]}", config);
         }
     }
 
@@ -501,6 +501,30 @@ public sealed class MainWindow : Window
         var panes = _config.Current.Panes;
         app.SplitWithPrevious = true;
         panes.Insert(panes.IndexOf(ConfigOf(pane)) + 1, app);
+        Sync();
+        SaveConfig();
+    }
+
+    public IEnumerable<string> Profiles() => _config.Layouts
+        .SelectMany(l => l.Panes)
+        .Select(p => p.Profile)
+        .OfType<string>()
+        .Where(p => p.Length > 0)
+        .Distinct()
+        .OrderBy(p => p);
+
+    // Moves the pane's app to another sign-in profile. The pane reloads under the new profile.
+    public void SetProfile(Pane pane, string? profile)
+    {
+        if (!_panes.Contains(pane)) return;
+        if (profile != null)
+        {
+            // WebView2 profile names allow letters, digits and a few symbols; keep it to the safe ones.
+            profile = new string(profile.Trim().Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray()).Trim('-');
+            if (profile.Length == 0) return;
+            if (profile.Length > 50) profile = profile[..50];
+        }
+        ConfigOf(pane).Profile = profile;
         Sync();
         SaveConfig();
     }

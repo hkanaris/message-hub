@@ -23,6 +23,9 @@ public sealed class PaneConfig
     public bool SplitWithPrevious { get; set; }
     public double Share { get; set; } = 1;
 
+    // Null: the shared default profile. Otherwise a separate WebView2 profile with its own sign-ins.
+    public string? Profile { get; set; }
+
     // Null: the default sound. "none", a sound from Windows' Media folder, or a .wav file path.
     public string? Sound { get; set; }
 

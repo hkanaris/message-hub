@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
@@ -41,6 +42,12 @@ public sealed class Pane : Border
     readonly TextBlock _expandButton;
     bool _pageFocused;
     bool _hasLatest;
+
+    // Backup alerts from the unread count, for when an app's notification doesn't arrive.
+    readonly DispatcherTimer _countCheck = new() { Interval = TimeSpan.FromSeconds(4) };
+    DateTime _countWatchFrom = DateTime.MaxValue;
+    DateTime _countRoseAt;
+    DateTime _lastNotification = DateTime.MinValue;
 
     public WebView2 Web { get; } = new();
 
@@ -110,7 +117,7 @@ public sealed class Pane : Border
 
         var name = new TextBlock
         {
-            Text = config.Name,
+            Text = string.IsNullOrEmpty(config.Profile) ? config.Name : $"{config.Name} · {config.Profile}",
             Foreground = Brushes.White,
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
@@ -153,8 +160,21 @@ public sealed class Pane : Border
 
     public async Task InitAsync(CoreWebView2Environment environment, string script)
     {
-        await Web.EnsureCoreWebView2Async(environment);
+        // Each sign-in profile keeps its own cookies, so a second account (another Teams tenant,
+        // say) can sit in its own pane.
+        var options = environment.CreateCoreWebView2ControllerOptions();
+        if (!string.IsNullOrEmpty(_config.Profile)) options.ProfileName = _config.Profile;
+        await Web.EnsureCoreWebView2Async(environment, options);
         var core = Web.CoreWebView2;
+
+        // Counts settle for a while after a page loads; only rises after that are new messages.
+        core.NavigationCompleted += (_, _) => _countWatchFrom = DateTime.Now.AddSeconds(20);
+        _countCheck.Tick += (_, _) =>
+        {
+            _countCheck.Stop();
+            if (_lastNotification < _countRoseAt && Unread > 0)
+                OnNotification(_config.Name, "New unread message", test: false, fromCount: true);
+        };
         core.Settings.IsStatusBarEnabled = false;
 
         if (_state.Zoom.TryGetValue(_config.Name, out var zoom)) Web.ZoomFactor = zoom;
@@ -172,7 +192,11 @@ public sealed class Pane : Border
         core.Navigate(_config.Url);
     }
 
-    public void Close() => Web.Dispose();
+    public void Close()
+    {
+        _countCheck.Stop();
+        Web.Dispose();
+    }
 
     // Points the pane at the showing layout's settings for this app (alerts, sound, size).
     public void Bind(PaneConfig config) => _config = config;
@@ -233,12 +257,17 @@ public sealed class Pane : Border
         }
     }
 
-    void OnNotification(string title, string body, bool test)
+    // fromCount: raised by the unread count going up, with no notification to open.
+    void OnNotification(string title, string body, bool test, bool fromCount = false)
     {
         var text = string.IsNullOrWhiteSpace(body) ? title : $"{title}: {body}";
         _preview.Text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         _preview.ToolTip = text;
-        _hasLatest = true;
+        if (!fromCount)
+        {
+            _hasLatest = true;
+            _lastNotification = DateTime.Now;
+        }
 
         var vip = _hub.VipKeywords.Any(k => !string.IsNullOrWhiteSpace(k) && text.Contains(k, StringComparison.OrdinalIgnoreCase));
         var alertOn = _config.AlertOn.ToLowerInvariant();
@@ -248,7 +277,8 @@ public sealed class Pane : Border
             : _pageFocused ? "Quiet: you were looking at it"
             : _host.Snoozed ? "Quiet: do not disturb"
             : null;
-        AlertLog.Add(_config.Name, text, quietBecause ?? (test ? "Test alert" : vip ? "Alerted (VIP)" : "Alerted"));
+        AlertLog.Add(_config.Name, text, quietBecause
+            ?? (test ? "Test alert" : fromCount ? "Alerted (unread count went up)" : vip ? "Alerted (VIP)" : "Alerted"));
         if (quietBecause != null) return;
 
         if (!Alerting)
@@ -276,6 +306,14 @@ public sealed class Pane : Border
             : title.StartsWith('*') || title.StartsWith('!') ? -1
             : 0;
         if (count == Unread) return;
+
+        // A rise with no notification close behind it alerts anyway, a few seconds later.
+        if (count > Math.Max(Unread, 0) && DateTime.Now > _countWatchFrom)
+        {
+            _countRoseAt = DateTime.Now;
+            _countCheck.Stop();
+            _countCheck.Start();
+        }
 
         Unread = count;
         _badge.Visibility = count == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -338,6 +376,22 @@ public sealed class Pane : Border
             if (dialog.ShowDialog() == true) SetSound(dialog.FileName);
         }, Sounds.IsFile(_config.Sound)));
         menu.Items.Add(sound);
+
+        var profile = new MenuItem
+        {
+            Header = string.IsNullOrEmpty(_config.Profile) ? "Sign-in profile: Default" : $"Sign-in profile: {_config.Profile}",
+            ToolTip = "A separate profile signs in separately, for a second account such as another Teams tenant.",
+        };
+        profile.Items.Add(Item("Default", () => _host.SetProfile(this, null), string.IsNullOrEmpty(_config.Profile)));
+        foreach (var name in _host.Profiles())
+            profile.Items.Add(Item(name, () => _host.SetProfile(this, name), _config.Profile == name));
+        profile.Items.Add(new Separator());
+        profile.Items.Add(Item("New profile…", () =>
+        {
+            var name = PromptDialog.Ask(_host, "New sign-in profile", "Name, e.g. Byron Court");
+            if (!string.IsNullOrWhiteSpace(name)) _host.SetProfile(this, name);
+        }));
+        menu.Items.Add(profile);
 
         var dnd = new MenuItem { Header = _host.Snoozed ? $"Do not disturb ({_host.SnoozeText})" : "Do not disturb" };
         dnd.Items.Add(Item("30 minutes", () => _host.Snooze(TimeSpan.FromMinutes(30))));
