@@ -15,6 +15,9 @@ public sealed class PaneConfig
     public string AlertOn { get; set; } = "all";
     public bool Enabled { get; set; } = true;
 
+    // The pane's share of the window height, set by dragging the dividers.
+    public double Size { get; set; } = 1;
+
     public PaneConfig Copy() => new() { Name = Name, Url = Url, Color = Color, AlertOn = AlertOn };
 }
 

@@ -10,6 +10,7 @@ Download `MessageHub.exe` from the latest release (or from the latest **Build** 
 
 - **New message:** the pane's header pulses in the app's colour, shows the message, the taskbar button flashes and a sound plays.
 - **Click a header** to jump to that message and clear the alert.
+- **Resize:** drag the divider between two panes. Sizes are remembered.
 - **Double-click a header** (or the expand button) to give that pane the whole window. The others shrink to their headers but keep alerting.
 - **Ctrl+1–9** expands a pane, **Ctrl+0** restores, **Ctrl+,** opens settings.
 - **Ctrl+mouse wheel** zooms a pane; the zoom is remembered.

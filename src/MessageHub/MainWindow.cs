@@ -113,6 +113,7 @@ public sealed class MainWindow : Window
         if (app == null) return;
 
         var index = _panes.IndexOf(pane);
+        if (!keepOld) app.Size = pane.Config.Size;
         var added = CreatePane(app);
         if (keepOld)
         {
@@ -180,25 +181,57 @@ public sealed class MainWindow : Window
         Arrange();
     }
 
-    // Lays the panes out top to bottom; with one expanded, the others keep just their headers.
+    // Lays the panes out top to bottom with a draggable divider between each pair.
+    // With one pane expanded, the others keep just their headers and the dividers are hidden.
     void Arrange()
     {
-        foreach (var pane in _grid.Children.OfType<Pane>().Except(_panes).ToList())
-            _grid.Children.Remove(pane);
+        foreach (var child in _grid.Children.OfType<UIElement>()
+                     .Where(c => c is GridSplitter || (c is Pane p && !_panes.Contains(p))).ToList())
+            _grid.Children.Remove(child);
 
         _grid.RowDefinitions.Clear();
         for (var i = 0; i < _panes.Count; i++)
         {
             var pane = _panes[i];
             var collapsed = _expanded != null && pane != _expanded;
+            var size = _expanded == null ? Math.Max(pane.Config.Size, 0.1) : 1;
             _grid.RowDefinitions.Add(new RowDefinition
             {
-                Height = collapsed ? new GridLength(Pane.HeaderHeight + 5) : new GridLength(1, GridUnitType.Star),
+                Height = collapsed ? new GridLength(Pane.HeaderHeight + 4) : new GridLength(size, GridUnitType.Star),
             });
-            Grid.SetRow(pane, i);
+            Grid.SetRow(pane, i * 2);
             if (!_grid.Children.Contains(pane)) _grid.Children.Add(pane);
             pane.SetExpanded(pane == _expanded);
+
+            if (i == _panes.Count - 1) break;
+
+            _grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(_expanded == null ? 5 : 1) });
+            if (_expanded != null) continue;
+
+            var divider = new GridSplitter
+            {
+                Height = 5,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                ResizeDirection = GridResizeDirection.Rows,
+                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+                Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3C)),
+                ShowsPreview = false,
+                ToolTip = "Drag to resize",
+            };
+            divider.DragCompleted += (_, _) => SaveSizes();
+            Grid.SetRow(divider, i * 2 + 1);
+            _grid.Children.Add(divider);
         }
+    }
+
+    void SaveSizes()
+    {
+        var total = _panes.Sum(p => _grid.RowDefinitions[Grid.GetRow(p)].ActualHeight);
+        if (total <= 0) return;
+
+        foreach (var pane in _panes)
+            pane.Config.Size = Math.Round(_grid.RowDefinitions[Grid.GetRow(pane)].ActualHeight / total * _panes.Count, 3);
+        SaveConfig();
     }
 
     void OnAlerted(Pane pane, bool vip)

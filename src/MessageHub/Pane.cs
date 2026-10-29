@@ -65,7 +65,6 @@ public sealed class Pane : Border
 
         BorderThickness = new Thickness(Edge);
         BorderBrush = Brushes.Transparent;
-        Margin = new Thickness(0, 0, 0, 1);
 
         _badgeText = new TextBlock
         {
