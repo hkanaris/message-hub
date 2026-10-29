@@ -1,5 +1,5 @@
 using System.Drawing;
-using System.Drawing.Drawing2D;
+using System.Reflection;
 using System.Windows.Forms;
 
 namespace MessageHub;
@@ -21,7 +21,7 @@ sealed class TrayIcon : IDisposable
         _icon = new NotifyIcon
         {
             Text = "Message Hub",
-            Icon = DrawIcon(),
+            Icon = LoadIcon(),
             ContextMenuStrip = menu,
             Visible = true,
         };
@@ -41,32 +41,10 @@ sealed class TrayIcon : IDisposable
         _icon.Dispose();
     }
 
-    // A rounded square with a speech bubble, drawn so there's no icon file to ship.
-    static Icon DrawIcon()
+    // The app icon at the size Windows uses for the notification area.
+    static Icon LoadIcon()
     {
-        using var bitmap = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bitmap))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            using var square = Rounded(new RectangleF(1, 1, 30, 30), 7);
-            using var fill = new SolidBrush(Color.FromArgb(0x7B, 0x83, 0xEB));
-            g.FillPath(fill, square);
-            using var bubble = Rounded(new RectangleF(7, 8, 18, 13), 4);
-            g.FillPath(Brushes.White, bubble);
-            g.FillPolygon(Brushes.White, new[] { new PointF(11, 20), new PointF(11, 25), new PointF(16, 20) });
-        }
-        return Icon.FromHandle(bitmap.GetHicon());
-    }
-
-    static GraphicsPath Rounded(RectangleF r, float radius)
-    {
-        var path = new GraphicsPath();
-        var d = radius * 2;
-        path.AddArc(r.Left, r.Top, d, d, 180, 90);
-        path.AddArc(r.Right - d, r.Top, d, d, 270, 90);
-        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        path.AddArc(r.Left, r.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.ico")!;
+        return new Icon(stream, SystemInformation.SmallIconSize);
     }
 }
