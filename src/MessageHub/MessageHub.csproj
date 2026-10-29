@@ -4,19 +4,26 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- Only for the tray icon. Its namespaces aren't imported globally, so WPF names stay unambiguous. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>MessageHub</AssemblyName>
     <RootNamespace>MessageHub</RootNamespace>
     <StartupObject>MessageHub.Program</StartupObject>
-    <Version>0.5.0</Version>
+    <Version>0.6.0</Version>
     <!-- Application.ThemeMode (the Windows 11 Fluent look) is still marked experimental. -->
-    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <NoWarn>$(NoWarn);WPF0001;WFO5001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
   <ItemGroup>

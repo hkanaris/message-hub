@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+using Microsoft.Win32;
 
 namespace MessageHub;
 
@@ -28,7 +29,7 @@ public sealed class Pane : Border
         "accounts.google.com", "appleid.apple.com", "okta.com",
     };
 
-    readonly PaneConfig _config;
+    PaneConfig _config;
     readonly MainWindow _host;
     readonly HubConfig _hub;
     readonly HubState _state;
@@ -42,7 +43,11 @@ public sealed class Pane : Border
     bool _hasLatest;
 
     public WebView2 Web { get; } = new();
+
+    // Identifies the app across layouts; layouts that share an app share its pane.
+    public string Key { get; }
     public PaneConfig Config => _config;
+    public string LatestText => _preview.Text;
     public string Title => _config.Name;
     public int Unread { get; private set; }
     public bool Alerting { get; private set; }
@@ -57,8 +62,9 @@ public sealed class Pane : Border
     public event Action<Pane, int>? MoveRequested;
     public event Action<Pane>? RemoveRequested;
 
-    public Pane(PaneConfig config, MainWindow host)
+    public Pane(string key, PaneConfig config, MainWindow host)
     {
+        Key = key;
         _config = config;
         _host = host;
         _hub = host.Config;
@@ -168,6 +174,9 @@ public sealed class Pane : Border
 
     public void Close() => Web.Dispose();
 
+    // Points the pane at the showing layout's settings for this app (alerts, sound, size).
+    public void Bind(PaneConfig config) => _config = config;
+
     public void SetExpanded(bool expanded) => _expandButton.Text = expanded ? "" : "";
 
     public void ClearAlert()
@@ -180,7 +189,7 @@ public sealed class Pane : Border
         StateChanged?.Invoke();
     }
 
-    void OpenLatest()
+    public void OpenLatest()
     {
         ClearAlert();
         if (_hasLatest) _ = Web.ExecuteScriptAsync("window.__hubOpenLast && window.__hubOpenLast()");
@@ -208,7 +217,10 @@ public sealed class Pane : Border
             switch (root.GetProperty("type").GetString())
             {
                 case "notification":
-                    OnNotification(root.GetProperty("title").GetString() ?? "", root.GetProperty("body").GetString() ?? "");
+                    OnNotification(
+                        root.GetProperty("title").GetString() ?? "",
+                        root.GetProperty("body").GetString() ?? "",
+                        root.TryGetProperty("test", out var test) && test.ValueKind == JsonValueKind.True);
                     break;
                 case "focus":
                     _pageFocused = root.GetProperty("value").GetBoolean();
@@ -221,7 +233,7 @@ public sealed class Pane : Border
         }
     }
 
-    void OnNotification(string title, string body)
+    void OnNotification(string title, string body, bool test)
     {
         var text = string.IsNullOrWhiteSpace(body) ? title : $"{title}: {body}";
         _preview.Text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -229,13 +241,15 @@ public sealed class Pane : Border
         _hasLatest = true;
 
         var vip = _hub.VipKeywords.Any(k => !string.IsNullOrWhiteSpace(k) && text.Contains(k, StringComparison.OrdinalIgnoreCase));
-        var loud = _config.AlertOn.ToLowerInvariant() switch
-        {
-            "none" => false,
-            "vip" => vip,
-            _ => true,
-        };
-        if (!loud || _pageFocused || _host.Snoozed) return;
+        var alertOn = _config.AlertOn.ToLowerInvariant();
+        var quietBecause = test ? null
+            : alertOn == "none" ? "Quiet: alerts are off for this app"
+            : alertOn == "vip" && !vip ? "Quiet: not a VIP"
+            : _pageFocused ? "Quiet: you were looking at it"
+            : _host.Snoozed ? "Quiet: do not disturb"
+            : null;
+        AlertLog.Add(_config.Name, text, quietBecause ?? (test ? "Test alert" : vip ? "Alerted (VIP)" : "Alerted"));
+        if (quietBecause != null) return;
 
         if (!Alerting)
         {
@@ -305,7 +319,23 @@ public sealed class Pane : Border
                 _host.SaveConfig();
             }, _config.AlertOn.Equals(value, StringComparison.OrdinalIgnoreCase)));
         }
+        alerts.Items.Add(new Separator());
+        alerts.Items.Add(Item("Send test alert", SendTestAlert));
         menu.Items.Add(alerts);
+
+        var sound = new MenuItem { Header = $"Sound for {_config.Name}" };
+        sound.Items.Add(Item("Default", () => SetSound(null), string.IsNullOrEmpty(_config.Sound)));
+        sound.Items.Add(Item("None", () => SetSound(Sounds.None), _config.Sound == Sounds.None));
+        sound.Items.Add(new Separator());
+        foreach (var choice in Sounds.Choices)
+            sound.Items.Add(Item(choice, () => SetSound(choice), _config.Sound == choice));
+        sound.Items.Add(new Separator());
+        sound.Items.Add(Item("Choose a file…", () =>
+        {
+            var dialog = new OpenFileDialog { Title = $"Sound for {_config.Name}", Filter = "Sounds (*.wav)|*.wav" };
+            if (dialog.ShowDialog() == true) SetSound(dialog.FileName);
+        }, Sounds.IsFile(_config.Sound)));
+        menu.Items.Add(sound);
 
         var dnd = new MenuItem { Header = _host.Snoozed ? $"Do not disturb ({_host.SnoozeText})" : "Do not disturb" };
         dnd.Items.Add(Item("30 minutes", () => _host.Snooze(TimeSpan.FromMinutes(30))));
@@ -348,16 +378,36 @@ public sealed class Pane : Border
         settings.Items.Add(Toggle("Flash taskbar", () => _hub.FlashTaskbar, v => _hub.FlashTaskbar = v));
         settings.Items.Add(Toggle("Expand pane for VIP messages", () => _hub.ExpandOnVip, v => _hub.ExpandOnVip = v));
         settings.Items.Add(new Separator());
+        settings.Items.Add(Item("Start with Windows", () => StartWithWindows.Enabled = !StartWithWindows.Enabled, StartWithWindows.Enabled));
+        settings.Items.Add(Toggle("Keep running in the tray when closed", () => _hub.CloseToTray, v => _hub.CloseToTray = v));
+        settings.Items.Add(new Separator());
+        settings.Items.Add(Item("Recent alerts…", _host.ShowAlertLog));
         settings.Items.Add(Item("Check for updates", () => _ = _host.CheckForUpdatesAsync(manual: true)));
         settings.Items.Add(Item("Restart Message Hub", MainWindow.Restart));
+        settings.Items.Add(Item("Quit Message Hub", MainWindow.Quit));
         menu.Items.Add(settings);
         menu.Items.Add(new Separator());
 
         menu.Items.Add(Item("Reload", () => Web.CoreWebView2?.Reload()));
         menu.Items.Add(Item("Expand / restore", () => ExpandRequested?.Invoke(this)));
+        menu.Items.Add(Item(_host.IsPoppedOut(this) ? "Put back in the hub" : "Pop out to its own window", () => _host.TogglePopOut(this)));
         menu.Items.Add(Item("Reset zoom", () => Web.ZoomFactor = 1.0));
         menu.Items.Add(Item("Open in browser", () =>
             Process.Start(new ProcessStartInfo(Web.Source?.AbsoluteUri ?? _config.Url) { UseShellExecute = true })));
+    }
+
+    void SetSound(string? sound)
+    {
+        _config.Sound = sound;
+        Sounds.Play(sound);
+        _host.SaveConfig();
+    }
+
+    // Goes through the page's own notification path, so it proves alerts reach the hub from this app.
+    void SendTestAlert()
+    {
+        var body = JsonSerializer.Serialize($"This is how a new {_config.Name} message looks");
+        _ = Web.ExecuteScriptAsync($"new Notification('Test alert', {{ body: {body}, tag: '__hub_test' }})");
     }
 
     MenuItem Toggle(string header, Func<bool> get, Action<bool> set) => Item(header, () =>

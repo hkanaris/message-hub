@@ -19,6 +19,9 @@ public sealed class PaneConfig
     // The pane's share of the window height, set by dragging the dividers.
     public double Size { get; set; } = 1;
 
+    // Null: the default sound. "none", a sound from Windows' Media folder, or a .wav file path.
+    public string? Sound { get; set; }
+
     public PaneConfig Copy() => new() { Name = Name, Url = Url, Color = Color, AlertOn = AlertOn };
 }
 
@@ -63,6 +66,7 @@ public sealed class HubConfig
     public bool Sound { get; set; } = true;
     public bool FlashTaskbar { get; set; } = true;
     public bool ExpandOnVip { get; set; } = false;
+    public bool CloseToTray { get; set; } = true;
 
     // Versions before 0.4 kept a single set of panes here. Read once, then moved into Layouts.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -166,6 +170,8 @@ public sealed class HubState
 
     // Do not disturb: alerts stay quiet until this time. DateTime.MaxValue means until turned off.
     public DateTime? SnoozedUntil { get; set; }
+
+    public bool TrayHintShown { get; set; }
     public Dictionary<string, double> Zoom { get; set; } = new();
 
     static string FilePath { get; } = Path.Combine(HubConfig.Folder, "state.json");

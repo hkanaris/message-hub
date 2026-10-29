@@ -10,7 +10,7 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 
 - **New message:** the pane's header pulses in the app's colour, shows the message, the taskbar button flashes and a sound plays.
 - **Click a header** to jump to that message and clear the alert.
-- **Layouts:** save different setups and switch between them, e.g. *Main* (Slack, WhatsApp, Teams, Claude stacked) and *Discord + ChatGPT* side by side. In the **⋯** menu, **Layout** lists your layouts; **New layout…** asks for a name, arrangement, number of apps and which apps. Rename and delete are there too. Apps in layouts that aren't showing don't alert.
+- **Layouts:** save different setups and switch between them, e.g. *Main* (Slack, WhatsApp, Teams, Claude stacked) and *Discord + ChatGPT* side by side. In the **⋯** menu, **Layout** lists your layouts; **New layout…** asks for a name, arrangement, number of apps and which apps. Rename and delete are there too. Apps in every layout keep running, so ones that aren't showing still alert: a red bar at the top says where, and clicking it takes you there.
 - **Arrange:** **Stacked**, **Side by side** or **Grid**, and 2–6 apps, for the layout you're in.
 - **Resize:** drag the divider between two panes (stacked and side by side). Sizes are remembered.
 - **Double-click a header** (or the expand button) to give that pane the whole window. The others shrink to their headers but keep alerting.
@@ -21,6 +21,10 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 - **Do not disturb:** 30 minutes, 1 hour or until you turn it off. The taskbar shows a grey "z" while it's on.
 - **Settings:** edit the VIP list, turn sound, taskbar flashing and expand-on-VIP on or off, check for updates.
 - **Updates:** Message Hub checks for a new release shortly after starting and every 6 hours, and offers to update itself.
+- **Sound for (app):** pick a different sound per app (Windows' notification sounds, none, or your own .wav).
+- **Pop out to its own window:** move a pane to another monitor. Close that window to put it back.
+- **Tray:** closing the window keeps Message Hub running in the notification area, and alerts arrive as Windows notifications. Click the tray icon to open it, right-click to quit. **Settings → Start with Windows** starts it in the tray when you sign in.
+- **Checking alerts work:** **Alerts → Send test alert** sends one through the app's own notification path. **Settings → Recent alerts…** lists every notification each app sent and what Message Hub did with it (alerted, or why it stayed quiet).
 - The same menu has reload, reset zoom and open in browser.
 - Links open in your normal browser.
 

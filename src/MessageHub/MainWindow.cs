@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Media;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
@@ -17,19 +16,36 @@ using Microsoft.Web.WebView2.Core;
 
 namespace MessageHub;
 
-// The app panes, laid out stacked, side by side or in a grid. One pane can be expanded;
-// the rest shrink to their headers.
+// Shows the active layout's apps stacked, side by side or in a grid. Every app in every layout
+// stays running, so the ones in layouts that aren't showing still alert. One pane can be expanded
+// (the rest shrink to their headers) and any pane can be popped out into its own window.
 public sealed class MainWindow : Window
 {
+    public static bool Quitting { get; private set; }
+
+    static readonly Color AlertRed = Color.FromRgb(0xE0, 0x1E, 0x2E);
+
     readonly HubConfig _config;
     readonly HubState _state;
+    readonly bool _startHidden;
     readonly Grid _grid = new();
+    readonly Border _alertBar;
+    readonly TextBlock _alertText;
+    readonly TrayIcon _tray = new();
+
+    // One pane per app across all layouts, keyed by Pane.Key.
+    readonly Dictionary<string, Pane> _pool = new();
+
+    // The showing layout's panes, in order.
     readonly List<Pane> _panes = new();
-    List<PaneConfig> _hidden = new();
+    readonly Dictionary<Pane, PopOutWindow> _poppedOut = new();
+
     readonly TaskCompletionSource<CoreWebView2Environment> _environment = new();
     readonly string _script = ReadScript();
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
     Pane? _expanded;
+    Pane? _notifiedPane;
+    AlertLogWindow? _alertLog;
     DateTime _lastSound = DateTime.MinValue;
     DateTime _nextUpdateCheck = DateTime.Now.AddSeconds(20);
     Version? _declinedUpdate;
@@ -45,25 +61,62 @@ public sealed class MainWindow : Window
         ? "until turned off"
         : $"until {_state.SnoozedUntil:HH:mm}";
 
-    public MainWindow(HubConfig config, HubState state)
+    public MainWindow(HubConfig config, HubState state, bool startHidden)
     {
         _config = config;
         _state = state;
+        _startHidden = startHidden;
 
         Title = "Message Hub";
         Background = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1C));
         TaskbarItemInfo = new TaskbarItemInfo();
-        Content = _grid;
         ApplySavedBounds(state);
 
-        ShowLayout(config.Current);
+        _alertText = new TextBlock
+        {
+            Foreground = Brushes.White,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(12, 5, 12, 6),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        _alertBar = new Border
+        {
+            Background = new SolidColorBrush(AlertRed),
+            Cursor = Cursors.Hand,
+            Visibility = Visibility.Collapsed,
+            Child = _alertText,
+            ToolTip = "Click to open",
+        };
+        _alertBar.MouseLeftButtonDown += (_, _) =>
+        {
+            var pane = _pool.Values.FirstOrDefault(p => p.Alerting && !_panes.Contains(p));
+            if (pane != null) ShowPane(pane);
+        };
 
-        Loaded += async (_, _) => await LoadPanesAsync();
+        var layout = new DockPanel();
+        DockPanel.SetDock(_alertBar, Dock.Top);
+        layout.Children.Add(_alertBar);
+        layout.Children.Add(_grid);
+        Content = layout;
+
+        _tray.OpenRequested += ShowFromTray;
+        _tray.NotificationClicked += () =>
+        {
+            if (_notifiedPane != null) ShowPane(_notifiedPane);
+            else ShowFromTray();
+        };
+
+        Sync();
+
+        Loaded += async (_, _) =>
+        {
+            if (_startHidden) Hide();
+            await CreateEnvironmentAsync();
+        };
         Closing += OnClosing;
         PreviewKeyDown += OnKey;
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
-        UpdateTaskbar();
     }
 
     // Every 30 seconds: end an expired do-not-disturb, and check for updates every 6 hours.
@@ -83,6 +136,42 @@ public sealed class MainWindow : Window
         }
     }
 
+    public static void Quit()
+    {
+        Quitting = true;
+        Application.Current.Shutdown();
+    }
+
+    public static void Restart()
+    {
+        var hidden = Application.Current.MainWindow is { IsVisible: false };
+        Process.Start(new ProcessStartInfo(Environment.ProcessPath!, hidden ? "--restart --tray" : "--restart") { UseShellExecute = false });
+        Quit();
+    }
+
+    public void ShowFromTray()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    // Brings the window up on the pane's layout and opens its latest message.
+    void ShowPane(Pane pane)
+    {
+        ShowFromTray();
+        if (_poppedOut.TryGetValue(pane, out var window))
+        {
+            window.Activate();
+        }
+        else if (!_panes.Contains(pane))
+        {
+            var layout = _config.Layouts.FirstOrDefault(l => Keys(l).Any(k => k.Key == pane.Key));
+            if (layout != null) SwitchLayout(layout);
+        }
+        pane.OpenLatest();
+    }
+
     // A null duration means until turned off; TimeSpan.Zero turns it off.
     public void Snooze(TimeSpan? duration)
     {
@@ -94,7 +183,7 @@ public sealed class MainWindow : Window
         };
         if (Snoozed)
         {
-            foreach (var pane in _panes) pane.ClearAlert();
+            foreach (var pane in _pool.Values) pane.ClearAlert();
         }
         SaveState();
         UpdateTaskbar();
@@ -108,6 +197,17 @@ public sealed class MainWindow : Window
         SaveConfig();
     }
 
+    public void ShowAlertLog()
+    {
+        if (_alertLog is { IsLoaded: true })
+        {
+            _alertLog.Activate();
+            return;
+        }
+        _alertLog = new AlertLogWindow { Owner = this };
+        _alertLog.Show();
+    }
+
     public void SetArrangement(string arrangement)
     {
         _config.Current.Arrangement = arrangement;
@@ -115,15 +215,11 @@ public sealed class MainWindow : Window
         SaveConfig();
     }
 
-    public void SwitchLayout(LayoutConfig layout, bool reload = false)
+    public void SwitchLayout(LayoutConfig layout)
     {
-        if (layout == _config.Current && !reload) return;
         _config.ActiveLayout = layout.Name;
-        foreach (var pane in _panes) pane.Close();
-        ShowLayout(layout);
+        Sync();
         SaveConfig();
-        UpdateTaskbar();
-        foreach (var pane in _panes.ToList()) _ = StartPaneAsync(pane);
     }
 
     public void NewLayout()
@@ -156,44 +252,45 @@ public sealed class MainWindow : Window
         if (MessageBox.Show(this, $"Delete the {current.Name} layout?", "Message Hub", MessageBoxButton.YesNo) != MessageBoxResult.Yes)
             return;
         _config.Layouts.Remove(current);
-        SwitchLayout(_config.Layouts[0], reload: true);
+        SwitchLayout(_config.Layouts[0]);
     }
 
-    // Replaces the panes on screen with the layout's. Callers close the old panes and start the new ones.
-    void ShowLayout(LayoutConfig layout)
-    {
-        _panes.Clear();
-        _expanded = null;
-        _hidden = layout.Panes.Where(p => !p.Enabled).ToList();
-        foreach (var paneConfig in layout.Panes.Where(p => p.Enabled))
-            _panes.Add(CreatePane(paneConfig));
-        Arrange();
-    }
-
-    // Adds apps not already showing, or removes panes from the end, to reach the count.
+    // Adds apps the layout doesn't have yet, or removes panes from the end, to reach the count.
     public void SetPaneCount(int count)
     {
-        while (_panes.Count > count)
+        var panes = _config.Current.Panes;
+        var enabled = Enabled();
+        foreach (var extra in enabled.Skip(count)) panes.Remove(extra);
+        for (var i = enabled.Count; i < count; i++)
         {
-            var last = _panes[^1];
-            _panes.Remove(last);
-            if (_expanded == last) _expanded = null;
-            last.Close();
+            var app = AppCatalog.Apps.FirstOrDefault(a => panes.All(p => p.Url != a.Url)) ?? AppCatalog.Apps[0];
+            panes.Add(app.Copy());
         }
-
-        var added = new List<Pane>();
-        while (_panes.Count < count)
-        {
-            var app = AppCatalog.Apps.FirstOrDefault(a => _panes.All(p => p.Config.Url != a.Url)) ?? AppCatalog.Apps[0];
-            var pane = CreatePane(app.Copy());
-            _panes.Add(pane);
-            added.Add(pane);
-        }
-
-        Arrange();
+        Sync();
         SaveConfig();
-        UpdateTaskbar();
-        foreach (var pane in added) _ = StartPaneAsync(pane);
+    }
+
+    public bool IsPoppedOut(Pane pane) => _poppedOut.ContainsKey(pane);
+
+    public void TogglePopOut(Pane pane)
+    {
+        if (_poppedOut.TryGetValue(pane, out var existing))
+        {
+            existing.Close();
+            return;
+        }
+
+        if (_expanded == pane) _expanded = null;
+        _grid.Children.Remove(pane);
+        var window = new PopOutWindow(pane);
+        window.Returned += w =>
+        {
+            _poppedOut.Remove(w.Pane);
+            Arrange();
+        };
+        _poppedOut[pane] = window;
+        window.Show();
+        Arrange();
     }
 
     public async Task CheckForUpdatesAsync(bool manual)
@@ -233,13 +330,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    public static void Restart()
-    {
-        Process.Start(new ProcessStartInfo(Environment.ProcessPath!, "--restart") { UseShellExecute = false });
-        Application.Current.Shutdown();
-    }
-
-    async Task LoadPanesAsync()
+    async Task CreateEnvironmentAsync()
     {
         try
         {
@@ -253,18 +344,14 @@ public sealed class MainWindow : Window
                 "Message Hub needs the Microsoft Edge WebView2 Runtime, which normally comes with Windows 11. " +
                 "Install it from https://go.microsoft.com/fwlink/p/?LinkId=2124703 and start Message Hub again.",
                 "Message Hub");
-            Close();
-            return;
+            Quit();
         }
-
-        foreach (var pane in _panes.ToList())
-            await StartPaneAsync(pane);
     }
 
     async Task StartPaneAsync(Pane pane)
     {
         var environment = await _environment.Task;
-        if (!_panes.Contains(pane)) return;
+        if (!_pool.ContainsValue(pane)) return;
         try
         {
             await pane.InitAsync(environment, _script);
@@ -275,9 +362,72 @@ public sealed class MainWindow : Window
         }
     }
 
-    Pane CreatePane(PaneConfig config)
+    static string ReadScript()
     {
-        var pane = new Pane(config, this);
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("HubScript.js")!;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    // Each app in a layout gets a key from its address. A second copy of the same app in one
+    // layout gets its own key, so it has its own pane.
+    static IEnumerable<(string Key, PaneConfig Config)> Keys(LayoutConfig layout)
+    {
+        var seen = new Dictionary<string, int>();
+        foreach (var config in layout.Panes.Where(p => p.Enabled))
+        {
+            var url = config.Url.Trim().TrimEnd('/').ToLowerInvariant();
+            seen[url] = seen.GetValueOrDefault(url) + 1;
+            yield return ($"{url}#{seen[url]}", config);
+        }
+    }
+
+    List<PaneConfig> Enabled() => _config.Current.Panes.Where(p => p.Enabled).ToList();
+
+    PaneConfig ConfigOf(Pane pane) => Enabled()[_panes.IndexOf(pane)];
+
+    // Makes the live panes match the config: starts apps that are new to any layout, closes
+    // apps no layout uses any more, and shows the active layout's panes.
+    void Sync()
+    {
+        var wanted = new Dictionary<string, PaneConfig>();
+        foreach (var layout in _config.Layouts.OrderBy(l => l == _config.Current ? 0 : 1))
+        {
+            foreach (var (key, config) in Keys(layout))
+                wanted.TryAdd(key, config);
+        }
+
+        foreach (var (key, pane) in _pool.Where(e => !wanted.ContainsKey(e.Key)).ToList())
+        {
+            _pool.Remove(key);
+            if (_poppedOut.Remove(pane, out var window)) window.CloseQuietly();
+            _grid.Children.Remove(pane);
+            pane.Close();
+        }
+
+        foreach (var (key, config) in wanted.Where(e => !_pool.ContainsKey(e.Key)))
+        {
+            var pane = CreatePane(key, config);
+            _pool[key] = pane;
+            _ = StartPaneAsync(pane);
+        }
+
+        _panes.Clear();
+        foreach (var (key, config) in Keys(_config.Current))
+        {
+            var pane = _pool[key];
+            pane.Bind(config);
+            _panes.Add(pane);
+        }
+
+        if (_expanded != null && !_panes.Contains(_expanded)) _expanded = null;
+        Arrange();
+        UpdateTaskbar();
+    }
+
+    Pane CreatePane(string key, PaneConfig config)
+    {
+        var pane = new Pane(key, config, this);
         pane.Alerted += OnAlerted;
         pane.ExpandRequested += ToggleExpand;
         pane.StateChanged += UpdateTaskbar;
@@ -288,58 +438,53 @@ public sealed class MainWindow : Window
         return pane;
     }
 
-    // Puts a new app in place of the pane, or below it when keepOld is set.
+    // Puts a new app in place of the pane, or after it when keepOld is set.
     void ReplacePane(Pane pane, PaneConfig? app, bool keepOld)
     {
+        if (!_panes.Contains(pane)) return;
         app ??= CustomAppDialog.Ask(this);
         if (app == null) return;
 
-        var index = _panes.IndexOf(pane);
-        if (!keepOld) app.Size = pane.Config.Size;
-        var added = CreatePane(app);
+        var panes = _config.Current.Panes;
+        var index = panes.IndexOf(ConfigOf(pane));
         if (keepOld)
         {
-            _panes.Insert(index + 1, added);
+            panes.Insert(index + 1, app);
         }
         else
         {
-            _panes[index] = added;
-            if (_expanded == pane) _expanded = added;
-            pane.Close();
+            app.Size = panes[index].Size;
+            panes[index] = app;
         }
-
-        Arrange();
+        Sync();
         SaveConfig();
-        UpdateTaskbar();
-        _ = StartPaneAsync(added);
     }
 
     void MovePane(Pane pane, int step)
     {
-        var index = _panes.IndexOf(pane);
-        var target = index + step;
-        if (target < 0 || target >= _panes.Count) return;
+        var from = _panes.IndexOf(pane);
+        var to = from + step;
+        if (from < 0 || to < 0 || to >= _panes.Count) return;
 
-        (_panes[index], _panes[target]) = (_panes[target], _panes[index]);
-        Arrange();
+        var panes = _config.Current.Panes;
+        var enabled = Enabled();
+        var a = panes.IndexOf(enabled[from]);
+        var b = panes.IndexOf(enabled[to]);
+        (panes[a], panes[b]) = (panes[b], panes[a]);
+        Sync();
         SaveConfig();
     }
 
     void RemovePane(Pane pane)
     {
-        if (_panes.Count == 1) return;
-
-        _panes.Remove(pane);
-        if (_expanded == pane) _expanded = null;
-        pane.Close();
-        Arrange();
+        if (_panes.Count == 1 || !_panes.Contains(pane)) return;
+        _config.Current.Panes.Remove(ConfigOf(pane));
+        Sync();
         SaveConfig();
-        UpdateTaskbar();
     }
 
     public void SaveConfig()
     {
-        _config.Current.Panes = _panes.Select(p => p.Config).Concat(_hidden).ToList();
         try
         {
             _config.Save();
@@ -350,47 +495,66 @@ public sealed class MainWindow : Window
         }
     }
 
-    static string ReadScript()
+    void SaveState()
     {
-        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("HubScript.js")!;
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        try
+        {
+            _state.Save();
+        }
+        catch (IOException)
+        {
+        }
     }
 
     void ToggleExpand(Pane pane)
     {
+        if (!_panes.Contains(pane) || _poppedOut.ContainsKey(pane)) return;
         _expanded = _expanded == pane ? null : pane;
         Arrange();
     }
 
     // Stacked and side-by-side layouts get a draggable divider between each pair of panes.
     // With a pane expanded, the layout is always stacked and the others keep just their headers.
+    // Panes from other layouts sit in a zero-height row so they keep running unseen.
     void Arrange()
     {
+        var shown = _panes.Where(p => !_poppedOut.ContainsKey(p)).ToList();
+        var parked = _pool.Values.Except(_panes).Where(p => !_poppedOut.ContainsKey(p)).ToList();
+
         foreach (var child in _grid.Children.OfType<UIElement>()
-                     .Where(c => c is GridSplitter || (c is Pane p && !_panes.Contains(p))).ToList())
+                     .Where(c => c is GridSplitter || (c is Pane p && !shown.Contains(p) && !parked.Contains(p))).ToList())
             _grid.Children.Remove(child);
 
         _grid.RowDefinitions.Clear();
         _grid.ColumnDefinitions.Clear();
         foreach (var pane in _panes) pane.SetExpanded(pane == _expanded);
 
-        var layout = _expanded != null ? "stacked" : _config.Current.Arrangement.ToLowerInvariant();
-        if (layout == "grid") ArrangeGrid();
-        else ArrangeLine(columns: layout == "side-by-side");
+        var arrangement = _expanded != null ? "stacked" : _config.Current.Arrangement.ToLowerInvariant();
+        if (arrangement == "grid") ArrangeGrid(shown);
+        else ArrangeLine(shown, columns: arrangement == "side-by-side");
+
+        if (parked.Count == 0) return;
+        if (_grid.RowDefinitions.Count == 0) AddTrack(false, new GridLength(1, GridUnitType.Star));
+        var row = _grid.RowDefinitions.Count;
+        AddTrack(false, new GridLength(0));
+        foreach (var pane in parked)
+        {
+            Place(pane, row, 0);
+            Grid.SetColumnSpan(pane, Math.Max(1, _grid.ColumnDefinitions.Count));
+        }
     }
 
-    void ArrangeLine(bool columns)
+    void ArrangeLine(List<Pane> shown, bool columns)
     {
-        for (var i = 0; i < _panes.Count; i++)
+        for (var i = 0; i < shown.Count; i++)
         {
-            var pane = _panes[i];
+            var pane = shown[i];
             var collapsed = _expanded != null && pane != _expanded;
             var size = _expanded == null ? Math.Max(pane.Config.Size, 0.1) : 1;
             AddTrack(columns, collapsed ? new GridLength(Pane.HeaderHeight + 4) : new GridLength(size, GridUnitType.Star));
             Place(pane, columns ? 0 : i * 2, columns ? i * 2 : 0);
 
-            if (i == _panes.Count - 1) break;
+            if (i == shown.Count - 1) break;
 
             AddTrack(columns, new GridLength(_expanded == null ? 5 : 1));
             if (_expanded != null) continue;
@@ -405,23 +569,24 @@ public sealed class MainWindow : Window
                 ShowsPreview = false,
                 ToolTip = "Drag to resize",
             };
-            divider.DragCompleted += (_, _) => SaveSizes(columns);
+            divider.DragCompleted += (_, _) => SaveSizes(shown, columns);
             Place(divider, columns ? 0 : i * 2 + 1, columns ? i * 2 + 1 : 0);
         }
     }
 
     // As square as possible: 4 apps make 2×2, 6 make 3×2. A short last row is stretched to fill.
-    void ArrangeGrid()
+    void ArrangeGrid(List<Pane> shown)
     {
-        var columns = (int)Math.Ceiling(Math.Sqrt(_panes.Count));
-        var rows = (int)Math.Ceiling(_panes.Count / (double)columns);
+        if (shown.Count == 0) return;
+        var columns = (int)Math.Ceiling(Math.Sqrt(shown.Count));
+        var rows = (int)Math.Ceiling(shown.Count / (double)columns);
         for (var c = 0; c < columns; c++) AddTrack(true, new GridLength(1, GridUnitType.Star));
         for (var r = 0; r < rows; r++) AddTrack(false, new GridLength(1, GridUnitType.Star));
 
-        for (var i = 0; i < _panes.Count; i++)
+        for (var i = 0; i < shown.Count; i++)
         {
-            Place(_panes[i], i / columns, i % columns);
-            if (i == _panes.Count - 1) Grid.SetColumnSpan(_panes[i], columns - i % columns);
+            Place(shown[i], i / columns, i % columns);
+            if (i == shown.Count - 1) Grid.SetColumnSpan(shown[i], columns - i % columns);
         }
     }
 
@@ -440,31 +605,39 @@ public sealed class MainWindow : Window
         if (!_grid.Children.Contains(element)) _grid.Children.Add(element);
     }
 
-    void SaveSizes(bool columns)
+    void SaveSizes(List<Pane> shown, bool columns)
     {
         double Length(Pane p) => columns
             ? _grid.ColumnDefinitions[Grid.GetColumn(p)].ActualWidth
             : _grid.RowDefinitions[Grid.GetRow(p)].ActualHeight;
 
-        var total = _panes.Sum(Length);
+        var total = shown.Sum(Length);
         if (total <= 0) return;
 
-        foreach (var pane in _panes)
-            pane.Config.Size = Math.Round(Length(pane) / total * _panes.Count, 3);
+        foreach (var pane in shown)
+            pane.Config.Size = Math.Round(Length(pane) / total * shown.Count, 3);
         SaveConfig();
     }
 
     void OnAlerted(Pane pane, bool vip)
     {
-        if (_config.FlashTaskbar && !IsActive) Native.FlashTaskbar(this);
+        var hidden = !IsVisible || WindowState == WindowState.Minimized;
+
+        if (_config.FlashTaskbar && IsVisible && !IsActive) Native.FlashTaskbar(this);
 
         if (_config.Sound && DateTime.Now - _lastSound > TimeSpan.FromSeconds(3))
         {
             _lastSound = DateTime.Now;
-            SystemSounds.Asterisk.Play();
+            Sounds.Play(pane.Config.Sound);
         }
 
-        if (vip && _config.ExpandOnVip && _expanded != pane) ToggleExpand(pane);
+        if (hidden)
+        {
+            _notifiedPane = pane;
+            _tray.Notify(pane.Title, pane.LatestText);
+        }
+
+        if (vip && _config.ExpandOnVip && _panes.Contains(pane) && _expanded != pane) ToggleExpand(pane);
     }
 
     // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back.
@@ -486,17 +659,23 @@ public sealed class MainWindow : Window
 
     void UpdateTaskbar()
     {
-        var alerting = _panes.Where(p => p.Alerting).ToList();
-        var unread = _panes.Sum(p => Math.Max(p.Unread, 0));
+        var alerting = _pool.Values.Where(p => p.Alerting).ToList();
+        var unread = _pool.Values.Sum(p => Math.Max(p.Unread, 0));
 
         Title = alerting.Count > 0 ? $"Message Hub · new in {string.Join(", ", alerting.Select(p => p.Title))}"
             : Snoozed ? $"Message Hub · do not disturb {SnoozeText}"
             : unread > 0 ? $"Message Hub ({unread})"
             : "Message Hub";
-        TaskbarItemInfo.Overlay = alerting.Count > 0 ? Badge(alerting.Count > 9 ? "9+" : alerting.Count.ToString(), Color.FromRgb(0xE0, 0x1E, 0x2E))
+        TaskbarItemInfo.Overlay = alerting.Count > 0 ? Badge(alerting.Count > 9 ? "9+" : alerting.Count.ToString(), AlertRed)
             : Snoozed ? Badge("z", Color.FromRgb(0x6E, 0x6E, 0x73))
             : null;
         TaskbarItemInfo.Description = Title;
+
+        // Alerts from apps in other layouts, which have no header on screen.
+        var elsewhere = alerting.Where(p => !_panes.Contains(p)).ToList();
+        _alertBar.Visibility = elsewhere.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _alertText.Text = elsewhere.Count == 0 ? ""
+            : $"New in {string.Join(", ", elsewhere.Select(p => p.Title))} · click to open";
     }
 
     ImageSource Badge(string label, Color color)
@@ -538,25 +717,35 @@ public sealed class MainWindow : Window
         if (state.Maximized) WindowState = WindowState.Maximized;
     }
 
+    // Closing hides to the tray unless that's turned off or Message Hub is quitting.
     void OnClosing(object? sender, CancelEventArgs e)
     {
-        var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
-        _state.Left = bounds.Left;
-        _state.Top = bounds.Top;
-        _state.Width = bounds.Width;
-        _state.Height = bounds.Height;
-        _state.Maximized = WindowState == WindowState.Maximized;
-        SaveState();
-    }
+        if (IsVisible)
+        {
+            var bounds = WindowState == WindowState.Normal ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+            _state.Left = bounds.Left;
+            _state.Top = bounds.Top;
+            _state.Width = bounds.Width;
+            _state.Height = bounds.Height;
+            _state.Maximized = WindowState == WindowState.Maximized;
+        }
 
-    void SaveState()
-    {
-        try
+        if (!Quitting && _config.CloseToTray)
         {
-            _state.Save();
+            e.Cancel = true;
+            Hide();
+            if (!_state.TrayHintShown)
+            {
+                _state.TrayHintShown = true;
+                _tray.Notify("Message Hub is still running", "It keeps alerting from the tray. Right-click the tray icon to quit.");
+            }
+            SaveState();
+            return;
         }
-        catch (IOException)
-        {
-        }
+
+        Quitting = true;
+        SaveState();
+        foreach (var window in _poppedOut.Values.ToList()) window.CloseQuietly();
+        _tray.Dispose();
     }
 }

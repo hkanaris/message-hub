@@ -22,7 +22,7 @@
       this.icon = options.icon ?? '';
       this.onclick = this.onclose = this.onshow = this.onerror = null;
       last = this;
-      send({ type: 'notification', title: this.title, body: this.body });
+      send({ type: 'notification', title: this.title, body: this.body, test: this.tag === '__hub_test' });
       setTimeout(() => this.__fire('show'), 0);
     }
 
