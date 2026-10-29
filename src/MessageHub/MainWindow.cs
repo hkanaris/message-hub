@@ -405,7 +405,7 @@ public sealed class MainWindow : Window
         var seen = new Dictionary<string, int>();
         foreach (var config in layout.Panes.Where(p => p.Enabled))
         {
-            var app = $"{config.Url.Trim().TrimEnd('/').ToLowerInvariant()}|{config.Profile}";
+            var app = $"{config.Url.Trim().TrimEnd('/').ToLowerInvariant()}|{config.Profile?.ToLowerInvariant()}";
             seen[app] = seen.GetValueOrDefault(app) + 1;
             yield return ($"{app}#{seen[app]}", config);
         }
@@ -485,6 +485,7 @@ public sealed class MainWindow : Window
             app.Size = panes[index].Size;
             app.Share = panes[index].Share;
             app.SplitWithPrevious = panes[index].SplitWithPrevious;
+            app.Profile = panes[index].Profile;
             panes[index] = app;
         }
         Sync();
@@ -510,21 +511,36 @@ public sealed class MainWindow : Window
         .Select(p => p.Profile)
         .OfType<string>()
         .Where(p => p.Length > 0)
-        .Distinct()
-        .OrderBy(p => p);
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(p => p, StringComparer.OrdinalIgnoreCase);
 
-    // Moves the pane's app to another sign-in profile. The pane reloads under the new profile.
+    // Moves the pane's app to another sign-in profile, in every layout that shows it. The pane
+    // reloads under the new profile.
     public void SetProfile(Pane pane, string? profile)
     {
         if (!_panes.Contains(pane)) return;
+        if (_poppedOut.ContainsKey(pane))
+        {
+            MessageBox.Show(this, "Put the pane back in the hub before changing its sign-in profile.", "Message Hub");
+            return;
+        }
+
         if (profile != null)
         {
-            // WebView2 profile names allow letters, digits and a few symbols; keep it to the safe ones.
+            // WebView2 profile names allow letters, digits and a few symbols, and ignore case.
             profile = new string(profile.Trim().Select(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '-').ToArray()).Trim('-');
-            if (profile.Length == 0) return;
             if (profile.Length > 50) profile = profile[..50];
+            if (profile.Length == 0 || profile.Equals("Default", StringComparison.OrdinalIgnoreCase)) profile = null;
+            else profile = Profiles().FirstOrDefault(p => p.Equals(profile, StringComparison.OrdinalIgnoreCase)) ?? profile;
         }
-        ConfigOf(pane).Profile = profile;
+
+        foreach (var layout in _config.Layouts)
+        {
+            foreach (var (key, config) in Keys(layout).ToList())
+            {
+                if (key == pane.Key) config.Profile = profile;
+            }
+        }
         Sync();
         SaveConfig();
     }

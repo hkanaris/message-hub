@@ -48,6 +48,8 @@ public sealed class Pane : Border
     DateTime _countWatchFrom = DateTime.MaxValue;
     DateTime _countRoseAt;
     DateTime _lastNotification = DateTime.MinValue;
+    DateTime _lastCountDrop = DateTime.MinValue;
+    int _countHighWater;
 
     public WebView2 Web { get; } = new();
 
@@ -55,7 +57,8 @@ public sealed class Pane : Border
     public string Key { get; }
     public PaneConfig Config => _config;
     public string LatestText => _preview.Text;
-    public string Title => _config.Name;
+    // The app's name, plus its sign-in profile when it has one, so two accounts can be told apart.
+    public string Title => string.IsNullOrEmpty(_config.Profile) ? _config.Name : $"{_config.Name} · {_config.Profile}";
     public int Unread { get; private set; }
     public bool Alerting { get; private set; }
 
@@ -117,7 +120,7 @@ public sealed class Pane : Border
 
         var name = new TextBlock
         {
-            Text = string.IsNullOrEmpty(config.Profile) ? config.Name : $"{config.Name} · {config.Profile}",
+            Text = Title,
             Foreground = Brushes.White,
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
@@ -156,6 +159,14 @@ public sealed class Pane : Border
         layout.Children.Add(header);
         layout.Children.Add(Web);
         Child = layout;
+
+        // A notification up to 5 seconds before the rise counts as covering it.
+        _countCheck.Tick += (_, _) =>
+        {
+            _countCheck.Stop();
+            if (_lastNotification < _countRoseAt.AddSeconds(-5) && Unread > 0)
+                OnNotification(Title, "New unread message", test: false, fromCount: true);
+        };
     }
 
     public async Task InitAsync(CoreWebView2Environment environment, string script)
@@ -168,17 +179,12 @@ public sealed class Pane : Border
         var core = Web.CoreWebView2;
 
         // Counts settle for a while after a page loads; only rises after that are new messages.
-        core.NavigationCompleted += (_, _) => _countWatchFrom = DateTime.Now.AddSeconds(20);
-        _countCheck.Tick += (_, _) =>
-        {
-            _countCheck.Stop();
-            if (_lastNotification < _countRoseAt && Unread > 0)
-                OnNotification(_config.Name, "New unread message", test: false, fromCount: true);
-        };
+        // Heavy apps can take a while to show their count, so give it a minute.
+        core.NavigationCompleted += (_, _) => _countWatchFrom = DateTime.Now.AddSeconds(60);
         core.Settings.IsStatusBarEnabled = false;
 
-        if (_state.Zoom.TryGetValue(_config.Name, out var zoom)) Web.ZoomFactor = zoom;
-        Web.ZoomFactorChanged += (_, _) => _state.Zoom[_config.Name] = Web.ZoomFactor;
+        if (_state.Zoom.TryGetValue(Title, out var zoom)) Web.ZoomFactor = zoom;
+        Web.ZoomFactorChanged += (_, _) => _state.Zoom[Title] = Web.ZoomFactor;
 
         await core.AddScriptToExecuteOnDocumentCreatedAsync(script);
         core.WebMessageReceived += OnWebMessage;
@@ -263,11 +269,9 @@ public sealed class Pane : Border
         var text = string.IsNullOrWhiteSpace(body) ? title : $"{title}: {body}";
         _preview.Text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         _preview.ToolTip = text;
-        if (!fromCount)
-        {
-            _hasLatest = true;
-            _lastNotification = DateTime.Now;
-        }
+        // A count-only alert has no notification to open, so a click mustn't open an older one.
+        _hasLatest = !fromCount;
+        if (!fromCount) _lastNotification = DateTime.Now;
 
         var vip = _hub.VipKeywords.Any(k => !string.IsNullOrWhiteSpace(k) && text.Contains(k, StringComparison.OrdinalIgnoreCase));
         var alertOn = _config.AlertOn.ToLowerInvariant();
@@ -277,7 +281,7 @@ public sealed class Pane : Border
             : _pageFocused ? "Quiet: you were looking at it"
             : _host.Snoozed ? "Quiet: do not disturb"
             : null;
-        AlertLog.Add(_config.Name, text, quietBecause
+        AlertLog.Add(Title, text, quietBecause
             ?? (test ? "Test alert" : fromCount ? "Alerted (unread count went up)" : vip ? "Alerted (VIP)" : "Alerted"));
         if (quietBecause != null) return;
 
@@ -307,13 +311,20 @@ public sealed class Pane : Border
             : 0;
         if (count == Unread) return;
 
-        // A rise with no notification close behind it alerts anyway, a few seconds later.
-        if (count > Math.Max(Unread, 0) && DateTime.Now > _countWatchFrom)
+        // A rise with no notification around it alerts anyway, a few seconds later. Compare with the
+        // highest recent count, so a title that flickers (1, 0, 1) isn't taken for new messages; a
+        // drop that has held for 10 seconds (messages read) resets that.
+        var now = DateTime.Now;
+        var previous = Math.Max(Unread, 0);
+        if (now - _lastCountDrop > TimeSpan.FromSeconds(10)) _countHighWater = previous;
+        if (count > _countHighWater && now > _countWatchFrom)
         {
-            _countRoseAt = DateTime.Now;
+            _countRoseAt = now;
             _countCheck.Stop();
             _countCheck.Start();
         }
+        if (count < previous) _lastCountDrop = now;
+        _countHighWater = Math.Max(_countHighWater, count);
 
         Unread = count;
         _badge.Visibility = count == 0 ? Visibility.Collapsed : Visibility.Visible;
