@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -40,6 +41,7 @@ public sealed class Pane : Border
     bool _hasLatest;
 
     public WebView2 Web { get; } = new();
+    public PaneConfig Config => _config;
     public string Title => _config.Name;
     public int Unread { get; private set; }
     public bool Alerting { get; private set; }
@@ -47,6 +49,12 @@ public sealed class Pane : Border
     public event Action<Pane, bool>? Alerted;
     public event Action<Pane>? ExpandRequested;
     public event Action? StateChanged;
+
+    // A null config means "ask for a custom app".
+    public event Action<Pane, PaneConfig?>? SwitchRequested;
+    public event Action<Pane, PaneConfig?>? AddRequested;
+    public event Action<Pane, int>? MoveRequested;
+    public event Action<Pane>? RemoveRequested;
 
     public Pane(PaneConfig config, HubConfig hub, HubState state)
     {
@@ -102,7 +110,14 @@ public sealed class Pane : Border
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
+        var menu = BuildMenu();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        buttons.Children.Add(IconButton("\uE712", "Apps and options", () =>
+        {
+            menu.PlacementTarget = header;
+            menu.Placement = PlacementMode.MousePoint;
+            menu.IsOpen = true;
+        }));
         buttons.Children.Add(IconButton("", "Reload", () => Web.CoreWebView2?.Reload()));
         buttons.Children.Add(_expandButton);
 
@@ -117,7 +132,7 @@ public sealed class Pane : Border
             if (e.ClickCount == 2) ExpandRequested?.Invoke(this);
             else OpenLatest();
         };
-        header.ContextMenu = BuildMenu();
+        header.ContextMenu = menu;
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -146,6 +161,8 @@ public sealed class Pane : Border
         core.NewWindowRequested += OnNewWindow;
         core.Navigate(_config.Url);
     }
+
+    public void Close() => Web.Dispose();
 
     public void SetExpanded(bool expanded) => _expandButton.Text = expanded ? "" : "";
 
@@ -267,6 +284,12 @@ public sealed class Pane : Border
     ContextMenu BuildMenu()
     {
         var menu = new ContextMenu();
+        menu.Items.Add(AppMenu("Switch to", app => SwitchRequested?.Invoke(this, app)));
+        menu.Items.Add(AppMenu("Add app below", app => AddRequested?.Invoke(this, app)));
+        menu.Items.Add(Item("Move up", () => MoveRequested?.Invoke(this, -1)));
+        menu.Items.Add(Item("Move down", () => MoveRequested?.Invoke(this, 1)));
+        menu.Items.Add(Item("Remove", () => RemoveRequested?.Invoke(this)));
+        menu.Items.Add(new Separator());
         menu.Items.Add(Item("Reload", () => Web.CoreWebView2?.Reload()));
         menu.Items.Add(Item("Expand / restore", () => ExpandRequested?.Invoke(this)));
         menu.Items.Add(Item("Reset zoom", () => Web.ZoomFactor = 1.0));
@@ -275,6 +298,16 @@ public sealed class Pane : Border
         menu.Items.Add(new Separator());
         menu.Items.Add(Item("Edit settings…", MainWindow.OpenSettings));
         menu.Items.Add(Item("Restart Message Hub", MainWindow.Restart));
+        return menu;
+    }
+
+    static MenuItem AppMenu(string header, Action<PaneConfig?> choose)
+    {
+        var menu = new MenuItem { Header = header };
+        foreach (var app in AppCatalog.Apps)
+            menu.Items.Add(Item(app.Name, () => choose(app.Copy())));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Custom…", () => choose(null)));
         return menu;
     }
 

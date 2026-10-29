@@ -13,14 +13,15 @@ Download `MessageHub.exe` from the latest release (or from the latest **Build** 
 - **Double-click a header** (or the expand button) to give that pane the whole window. The others shrink to their headers but keep alerting.
 - **Ctrl+1–9** expands a pane, **Ctrl+0** restores, **Ctrl+,** opens settings.
 - **Ctrl+mouse wheel** zooms a pane; the zoom is remembered.
-- **Right-click a header** for reload, reset zoom, open in browser, settings and restart.
+- **Swap apps:** click a header's **⋯** button (or right-click the header). **Switch to** replaces the pane with another app, **Add app below** adds a new pane, and there's **Move up**, **Move down** and **Remove**. Built in: Slack, WhatsApp, Teams, Claude, ChatGPT, Discord, Outlook, Telegram, Messenger, Google Chat and Gmail. **Custom…** takes any web address. Changes apply at once and are saved.
+- The same menu has reload, reset zoom, open in browser, settings and restart.
 - Links open in your normal browser.
 
 Close the desktop Slack, WhatsApp and Teams apps, or you'll get every notification twice. Keep desktop Teams for calls and screen sharing.
 
 ## Settings
 
-`%APPDATA%\MessageHub\config.json`, created on first run. Edit it, then restart from the right-click menu.
+`%APPDATA%\MessageHub\config.json`, created on first run. Edit it, then restart from the header menu. Changing apps from the menu rewrites this file.
 
 ```json
 {
@@ -40,7 +41,7 @@ Close the desktop Slack, WhatsApp and Teams apps, or you'll get every notificati
 - `alertOn`: `all` alerts on every notification, `vip` only when the sender or text matches `vipKeywords`, `none` never (the header still shows the latest message).
 - `vipKeywords`: names, chats or channels that matter. Matching is on the notification's title and text, ignoring case.
 - `expandOnVip`: a VIP message expands its pane automatically.
-- Add a pane (ChatGPT, Discord, 4trak…) by adding an entry; `"enabled": false` hides one.
+- `"enabled": false` hides a pane without removing it.
 
 Which messages trigger a notification is still each app's own setting (Slack's notification preferences, muted WhatsApp chats and so on).
 

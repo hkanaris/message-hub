@@ -21,6 +21,9 @@ public sealed class MainWindow : Window
     readonly HubState _state;
     readonly Grid _grid = new();
     readonly List<Pane> _panes = new();
+    readonly List<PaneConfig> _hidden;
+    readonly TaskCompletionSource<CoreWebView2Environment> _environment = new();
+    readonly string _script = ReadScript();
     Pane? _expanded;
     DateTime _lastSound = DateTime.MinValue;
 
@@ -35,17 +38,10 @@ public sealed class MainWindow : Window
         Content = _grid;
         ApplySavedBounds(state);
 
+        _hidden = config.Panes.Where(p => !p.Enabled).ToList();
         foreach (var paneConfig in config.Panes.Where(p => p.Enabled))
-        {
-            var pane = new Pane(paneConfig, config, state);
-            pane.Alerted += OnAlerted;
-            pane.ExpandRequested += ToggleExpand;
-            pane.StateChanged += UpdateTaskbar;
-            Grid.SetRow(pane, _panes.Count);
-            _grid.RowDefinitions.Add(new RowDefinition());
-            _grid.Children.Add(pane);
-            _panes.Add(pane);
-        }
+            _panes.Add(CreatePane(paneConfig));
+        Arrange();
 
         Loaded += async (_, _) => await LoadPanesAsync();
         Closing += OnClosing;
@@ -63,12 +59,11 @@ public sealed class MainWindow : Window
 
     async Task LoadPanesAsync()
     {
-        CoreWebView2Environment environment;
         try
         {
             var dataFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MessageHub", "WebView2");
-            environment = await CoreWebView2Environment.CreateAsync(null, dataFolder);
+            _environment.SetResult(await CoreWebView2Environment.CreateAsync(null, dataFolder));
         }
         catch (WebView2RuntimeNotFoundException)
         {
@@ -80,17 +75,95 @@ public sealed class MainWindow : Window
             return;
         }
 
-        var script = ReadScript();
-        foreach (var pane in _panes)
+        foreach (var pane in _panes.ToList())
+            await StartPaneAsync(pane);
+    }
+
+    async Task StartPaneAsync(Pane pane)
+    {
+        var environment = await _environment.Task;
+        if (!_panes.Contains(pane)) return;
+        try
         {
-            try
-            {
-                await pane.InitAsync(environment, script);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"{pane.Title} couldn't start.\n\n{ex.Message}", "Message Hub");
-            }
+            await pane.InitAsync(environment, _script);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"{pane.Title} couldn't start.\n\n{ex.Message}", "Message Hub");
+        }
+    }
+
+    Pane CreatePane(PaneConfig config)
+    {
+        var pane = new Pane(config, _config, _state);
+        pane.Alerted += OnAlerted;
+        pane.ExpandRequested += ToggleExpand;
+        pane.StateChanged += UpdateTaskbar;
+        pane.SwitchRequested += (p, app) => ReplacePane(p, app, keepOld: false);
+        pane.AddRequested += (p, app) => ReplacePane(p, app, keepOld: true);
+        pane.MoveRequested += MovePane;
+        pane.RemoveRequested += RemovePane;
+        return pane;
+    }
+
+    // Puts a new app in place of the pane, or below it when keepOld is set.
+    void ReplacePane(Pane pane, PaneConfig? app, bool keepOld)
+    {
+        app ??= CustomAppDialog.Ask(this);
+        if (app == null) return;
+
+        var index = _panes.IndexOf(pane);
+        var added = CreatePane(app);
+        if (keepOld)
+        {
+            _panes.Insert(index + 1, added);
+        }
+        else
+        {
+            _panes[index] = added;
+            if (_expanded == pane) _expanded = added;
+            pane.Close();
+        }
+
+        Arrange();
+        SaveConfig();
+        UpdateTaskbar();
+        _ = StartPaneAsync(added);
+    }
+
+    void MovePane(Pane pane, int step)
+    {
+        var index = _panes.IndexOf(pane);
+        var target = index + step;
+        if (target < 0 || target >= _panes.Count) return;
+
+        (_panes[index], _panes[target]) = (_panes[target], _panes[index]);
+        Arrange();
+        SaveConfig();
+    }
+
+    void RemovePane(Pane pane)
+    {
+        if (_panes.Count == 1) return;
+
+        _panes.Remove(pane);
+        if (_expanded == pane) _expanded = null;
+        pane.Close();
+        Arrange();
+        SaveConfig();
+        UpdateTaskbar();
+    }
+
+    void SaveConfig()
+    {
+        _config.Panes = _panes.Select(p => p.Config).Concat(_hidden).ToList();
+        try
+        {
+            _config.Save();
+        }
+        catch (IOException ex)
+        {
+            MessageBox.Show($"Couldn't save config.json.\n\n{ex.Message}", "Message Hub");
         }
     }
 
@@ -104,13 +177,27 @@ public sealed class MainWindow : Window
     void ToggleExpand(Pane pane)
     {
         _expanded = _expanded == pane ? null : pane;
+        Arrange();
+    }
+
+    // Lays the panes out top to bottom; with one expanded, the others keep just their headers.
+    void Arrange()
+    {
+        foreach (var pane in _grid.Children.OfType<Pane>().Except(_panes).ToList())
+            _grid.Children.Remove(pane);
+
+        _grid.RowDefinitions.Clear();
         for (var i = 0; i < _panes.Count; i++)
         {
-            var collapsed = _expanded != null && _panes[i] != _expanded;
-            _grid.RowDefinitions[i].Height = collapsed
-                ? new GridLength(Pane.HeaderHeight + 5)
-                : new GridLength(1, GridUnitType.Star);
-            _panes[i].SetExpanded(_panes[i] == _expanded);
+            var pane = _panes[i];
+            var collapsed = _expanded != null && pane != _expanded;
+            _grid.RowDefinitions.Add(new RowDefinition
+            {
+                Height = collapsed ? new GridLength(Pane.HeaderHeight + 5) : new GridLength(1, GridUnitType.Star),
+            });
+            Grid.SetRow(pane, i);
+            if (!_grid.Children.Contains(pane)) _grid.Children.Add(pane);
+            pane.SetExpanded(pane == _expanded);
         }
     }
 

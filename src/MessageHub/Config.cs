@@ -14,9 +14,32 @@ public sealed class PaneConfig
     // "none": never loud; the header still shows the latest message.
     public string AlertOn { get; set; } = "all";
     public bool Enabled { get; set; } = true;
+
+    public PaneConfig Copy() => new() { Name = Name, Url = Url, Color = Color, AlertOn = AlertOn };
 }
 
-// config.json belongs to the user: the app writes it once with defaults and never again.
+// The apps offered by each pane's "Switch to" and "Add app below" menus.
+public static class AppCatalog
+{
+    public static IReadOnlyList<PaneConfig> Apps { get; } = new PaneConfig[]
+    {
+        new() { Name = "Slack", Url = "https://app.slack.com/client", Color = "#E01E5A" },
+        new() { Name = "WhatsApp", Url = "https://web.whatsapp.com", Color = "#25D366" },
+        new() { Name = "Teams", Url = "https://teams.microsoft.com", Color = "#7B83EB" },
+        new() { Name = "Claude", Url = "https://claude.ai", Color = "#D97757" },
+        new() { Name = "ChatGPT", Url = "https://chatgpt.com", Color = "#10A37F" },
+        new() { Name = "Discord", Url = "https://discord.com/app", Color = "#5865F2" },
+        new() { Name = "Outlook", Url = "https://outlook.office.com/mail/", Color = "#0F78D4" },
+        new() { Name = "Telegram", Url = "https://web.telegram.org/a/", Color = "#2AABEE" },
+        new() { Name = "Messenger", Url = "https://www.messenger.com", Color = "#0084FF" },
+        new() { Name = "Google Chat", Url = "https://chat.google.com", Color = "#00AC47" },
+        new() { Name = "Gmail", Url = "https://mail.google.com", Color = "#EA4335" },
+    };
+
+    public static PaneConfig Get(string name) => Apps.First(a => a.Name == name).Copy();
+}
+
+// config.json can be edited by hand. The app rewrites it when panes are changed from a pane's menu.
 public sealed class HubConfig
 {
     public List<PaneConfig> Panes { get; set; } = new();
@@ -62,14 +85,20 @@ public sealed class HubConfig
         return Defaults();
     }
 
+    public void Save()
+    {
+        Directory.CreateDirectory(Folder);
+        File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+    }
+
     static HubConfig Defaults() => new()
     {
         Panes =
         {
-            new() { Name = "Slack", Url = "https://app.slack.com/client", Color = "#E01E5A" },
-            new() { Name = "WhatsApp", Url = "https://web.whatsapp.com", Color = "#25D366" },
-            new() { Name = "Teams", Url = "https://teams.microsoft.com", Color = "#7B83EB" },
-            new() { Name = "Claude", Url = "https://claude.ai", Color = "#D97757" },
+            AppCatalog.Get("Slack"),
+            AppCatalog.Get("WhatsApp"),
+            AppCatalog.Get("Teams"),
+            AppCatalog.Get("Claude"),
         },
     };
 }
