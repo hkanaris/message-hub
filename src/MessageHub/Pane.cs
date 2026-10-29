@@ -379,7 +379,7 @@ public sealed class Pane : Border
         settings.Items.Add(Toggle("Expand pane for VIP messages", () => _hub.ExpandOnVip, v => _hub.ExpandOnVip = v));
         settings.Items.Add(new Separator());
         settings.Items.Add(Item("Start with Windows", () => StartWithWindows.Enabled = !StartWithWindows.Enabled, StartWithWindows.Enabled));
-        settings.Items.Add(Toggle("Keep running in the tray when closed", () => _hub.CloseToTray, v => _hub.CloseToTray = v));
+        settings.Items.Add(Toggle("Keep running when closed (minimise)", () => _hub.CloseToTray, v => _hub.CloseToTray = v));
         settings.Items.Add(new Separator());
         settings.Items.Add(Item("Recent alerts…", _host.ShowAlertLog));
         settings.Items.Add(Item("Check for updates", () => _ = _host.CheckForUpdatesAsync(manual: true)));

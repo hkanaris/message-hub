@@ -28,6 +28,9 @@ public sealed class MainWindow : Window
     readonly HubConfig _config;
     readonly HubState _state;
     readonly bool _startHidden;
+
+    // The window's state before it was last minimised, so restoring brings back a maximised window.
+    WindowState _lastShownState = WindowState.Normal;
     readonly Grid _grid = new();
     readonly Border _alertBar;
     readonly TextBlock _alertText;
@@ -110,10 +113,14 @@ public sealed class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
-            if (_startHidden) Hide();
+            if (_startHidden) WindowState = WindowState.Minimized;
             await CreateEnvironmentAsync();
         };
         Closing += OnClosing;
+        StateChanged += (_, _) =>
+        {
+            if (WindowState != WindowState.Minimized) _lastShownState = WindowState;
+        };
         PreviewKeyDown += OnKey;
         _timer.Tick += (_, _) => OnTick();
         _timer.Start();
@@ -152,7 +159,7 @@ public sealed class MainWindow : Window
     public void ShowFromTray()
     {
         Show();
-        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        if (WindowState == WindowState.Minimized) WindowState = _lastShownState;
         Activate();
     }
 
@@ -725,7 +732,10 @@ public sealed class MainWindow : Window
         if (state.Maximized) WindowState = WindowState.Maximized;
     }
 
-    // Closing hides to the tray unless that's turned off or Message Hub is quitting.
+    // Closing minimises to the taskbar unless that's turned off or Message Hub is quitting. It stays
+    // on the taskbar (not just the tray) so clicking its button restores this window: clicking a
+    // pinned icon with no window open would start a second copy, which some security policies
+    // stop with a "content is blocked" prompt.
     void OnClosing(object? sender, CancelEventArgs e)
     {
         if (IsVisible)
@@ -735,17 +745,17 @@ public sealed class MainWindow : Window
             _state.Top = bounds.Top;
             _state.Width = bounds.Width;
             _state.Height = bounds.Height;
-            _state.Maximized = WindowState == WindowState.Maximized;
+            _state.Maximized = (WindowState == WindowState.Minimized ? _lastShownState : WindowState) == WindowState.Maximized;
         }
 
         if (!Quitting && _config.CloseToTray)
         {
             e.Cancel = true;
-            Hide();
+            WindowState = WindowState.Minimized;
             if (!_state.TrayHintShown)
             {
                 _state.TrayHintShown = true;
-                _tray.Notify("Message Hub is still running", "It keeps alerting from the tray. Right-click the tray icon to quit.");
+                _tray.Notify("Message Hub is still running", "It's minimised and keeps alerting. To quit, right-click the tray icon.");
             }
             SaveState();
             return;

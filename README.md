@@ -23,7 +23,7 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 - **Updates:** Message Hub checks for a new release shortly after starting and every 6 hours, and offers to update itself.
 - **Sound for (app):** pick a different sound per app (Windows' notification sounds, none, or your own .wav).
 - **Pop out to its own window:** move a pane to another monitor. Close that window to put it back.
-- **Tray:** closing the window keeps Message Hub running in the notification area, and alerts arrive as Windows notifications. Click the tray icon to open it, right-click to quit. **Settings → Start with Windows** starts it in the tray when you sign in.
+- **Closing:** closing the window minimises it to the taskbar so it keeps alerting; while minimised, alerts also arrive as Windows notifications. Quit from the tray icon (right-click) or **Settings → Quit Message Hub**. **Settings → Start with Windows** starts it minimised when you sign in.
 - **Checking alerts work:** **Alerts → Send test alert** sends one through the app's own notification path. **Settings → Recent alerts…** lists every notification each app sent and what Message Hub did with it (alerted, or why it stayed quiet).
 - The same menu has reload, reset zoom and open in browser.
 - Links open in your normal browser.
