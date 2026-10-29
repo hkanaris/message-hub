@@ -331,7 +331,18 @@ public sealed class MainWindow : Window
             _updating = true;
             Title = $"Message Hub · downloading {latest.Tag}…";
             await Updater.InstallAsync(latest);
-            Restart();
+            try
+            {
+                Restart();
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                _updating = false;
+                UpdateTaskbar();
+                MessageBox.Show(this,
+                    $"{latest.Tag} is installed but Windows wouldn't start it. Quit Message Hub from the tray icon and start it again.",
+                    "Message Hub");
+            }
         }
         catch (Exception ex)
         {

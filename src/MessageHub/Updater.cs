@@ -50,14 +50,28 @@ static class Updater
             await response.Content.CopyToAsync(file);
         }
 
-        if (File.Exists(oldPath)) File.Delete(oldPath);
+        // A previous update's .old copy may still be running and can't be deleted; move aside to a fresh name instead.
+        if (File.Exists(oldPath))
+        {
+            try
+            {
+                File.Delete(oldPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                oldPath = $"{ExePath}.old-{DateTime.Now:yyyyMMddHHmmss}";
+            }
+        }
         File.Move(ExePath, oldPath);
         File.Move(newPath, ExePath);
     }
 
     public static void CleanUp()
     {
-        foreach (var leftover in new[] { ExePath + ".old", ExePath + ".new" })
+        var folder = Path.GetDirectoryName(ExePath)!;
+        var name = Path.GetFileName(ExePath);
+        var leftovers = Directory.GetFiles(folder, name + ".old*").Append(ExePath + ".new");
+        foreach (var leftover in leftovers)
         {
             try
             {
