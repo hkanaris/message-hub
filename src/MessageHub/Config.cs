@@ -51,6 +51,9 @@ public sealed class HubConfig
     public bool FlashTaskbar { get; set; } = true;
     public bool ExpandOnVip { get; set; } = false;
 
+    // "stacked" (top to bottom), "side-by-side" or "grid".
+    public string Layout { get; set; } = "stacked";
+
     public static string Folder { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MessageHub");
 
@@ -114,6 +117,9 @@ public sealed class HubState
     public double? Width { get; set; }
     public double? Height { get; set; }
     public bool Maximized { get; set; }
+
+    // Do not disturb: alerts stay quiet until this time. DateTime.MaxValue means until turned off.
+    public DateTime? SnoozedUntil { get; set; }
     public Dictionary<string, double> Zoom { get; set; } = new();
 
     static string FilePath { get; } = Path.Combine(HubConfig.Folder, "state.json");

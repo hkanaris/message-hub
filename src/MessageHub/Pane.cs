@@ -29,6 +29,7 @@ public sealed class Pane : Border
     };
 
     readonly PaneConfig _config;
+    readonly MainWindow _host;
     readonly HubConfig _hub;
     readonly HubState _state;
     readonly Color _accent;
@@ -56,11 +57,12 @@ public sealed class Pane : Border
     public event Action<Pane, int>? MoveRequested;
     public event Action<Pane>? RemoveRequested;
 
-    public Pane(PaneConfig config, HubConfig hub, HubState state)
+    public Pane(PaneConfig config, MainWindow host)
     {
         _config = config;
-        _hub = hub;
-        _state = state;
+        _host = host;
+        _hub = host.Config;
+        _state = host.State;
         _accent = ParseColor(config.Color);
 
         BorderThickness = new Thickness(Edge);
@@ -109,10 +111,12 @@ public sealed class Pane : Border
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        var menu = BuildMenu();
+        var menu = new ContextMenu();
+        FillMenu(menu);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
         buttons.Children.Add(IconButton("\uE712", "Apps and options", () =>
         {
+            FillMenu(menu);
             menu.PlacementTarget = header;
             menu.Placement = PlacementMode.MousePoint;
             menu.IsOpen = true;
@@ -132,6 +136,7 @@ public sealed class Pane : Border
             else OpenLatest();
         };
         header.ContextMenu = menu;
+        header.ContextMenuOpening += (_, _) => FillMenu(menu);
 
         var layout = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
@@ -230,7 +235,7 @@ public sealed class Pane : Border
             "vip" => vip,
             _ => true,
         };
-        if (!loud || _pageFocused) return;
+        if (!loud || _pageFocused || _host.Snoozed) return;
 
         if (!Alerting)
         {
@@ -280,25 +285,73 @@ public sealed class Pane : Border
             Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
     }
 
-    ContextMenu BuildMenu()
+    // Rebuilt each time it opens so the ticks show the current settings.
+    void FillMenu(ContextMenu menu)
     {
-        var menu = new ContextMenu();
+        menu.Items.Clear();
         menu.Items.Add(AppMenu("Switch to", app => SwitchRequested?.Invoke(this, app)));
         menu.Items.Add(AppMenu("Add app below", app => AddRequested?.Invoke(this, app)));
         menu.Items.Add(Item("Move up", () => MoveRequested?.Invoke(this, -1)));
         menu.Items.Add(Item("Move down", () => MoveRequested?.Invoke(this, 1)));
         menu.Items.Add(Item("Remove", () => RemoveRequested?.Invoke(this)));
         menu.Items.Add(new Separator());
+
+        var alerts = new MenuItem { Header = $"Alerts for {_config.Name}" };
+        foreach (var (label, value) in new[] { ("All messages", "all"), ("VIP only", "vip"), ("Off", "none") })
+        {
+            alerts.Items.Add(Item(label, () =>
+            {
+                _config.AlertOn = value;
+                _host.SaveConfig();
+            }, _config.AlertOn.Equals(value, StringComparison.OrdinalIgnoreCase)));
+        }
+        menu.Items.Add(alerts);
+
+        var dnd = new MenuItem { Header = _host.Snoozed ? $"Do not disturb ({_host.SnoozeText})" : "Do not disturb" };
+        dnd.Items.Add(Item("30 minutes", () => _host.Snooze(TimeSpan.FromMinutes(30))));
+        dnd.Items.Add(Item("1 hour", () => _host.Snooze(TimeSpan.FromHours(1))));
+        dnd.Items.Add(Item("Until I turn it off", () => _host.Snooze(null)));
+        dnd.Items.Add(new Separator());
+        var off = Item("Turn off", () => _host.Snooze(TimeSpan.Zero));
+        off.IsEnabled = _host.Snoozed;
+        dnd.Items.Add(off);
+        menu.Items.Add(dnd);
+
+        var layout = new MenuItem { Header = "Layout" };
+        foreach (var (label, value) in new[] { ("Stacked", "stacked"), ("Side by side", "side-by-side"), ("Grid", "grid") })
+            layout.Items.Add(Item(label, () => _host.SetLayout(value), _hub.Layout.Equals(value, StringComparison.OrdinalIgnoreCase)));
+        layout.Items.Add(new Separator());
+        for (var count = 2; count <= 6; count++)
+        {
+            var n = count;
+            layout.Items.Add(Item($"{n} apps", () => _host.SetPaneCount(n), _host.PaneCount == n));
+        }
+        menu.Items.Add(layout);
+
+        var settings = new MenuItem { Header = "Settings" };
+        settings.Items.Add(Item("VIP list…", _host.EditVipList));
+        settings.Items.Add(Toggle("Sound", () => _hub.Sound, v => _hub.Sound = v));
+        settings.Items.Add(Toggle("Flash taskbar", () => _hub.FlashTaskbar, v => _hub.FlashTaskbar = v));
+        settings.Items.Add(Toggle("Expand pane for VIP messages", () => _hub.ExpandOnVip, v => _hub.ExpandOnVip = v));
+        settings.Items.Add(new Separator());
+        settings.Items.Add(Item("Check for updates", () => _ = _host.CheckForUpdatesAsync(manual: true)));
+        settings.Items.Add(Item("Edit config file…", MainWindow.OpenSettings));
+        settings.Items.Add(Item("Restart Message Hub", MainWindow.Restart));
+        menu.Items.Add(settings);
+        menu.Items.Add(new Separator());
+
         menu.Items.Add(Item("Reload", () => Web.CoreWebView2?.Reload()));
         menu.Items.Add(Item("Expand / restore", () => ExpandRequested?.Invoke(this)));
         menu.Items.Add(Item("Reset zoom", () => Web.ZoomFactor = 1.0));
         menu.Items.Add(Item("Open in browser", () =>
             Process.Start(new ProcessStartInfo(Web.Source?.AbsoluteUri ?? _config.Url) { UseShellExecute = true })));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("Edit settings…", MainWindow.OpenSettings));
-        menu.Items.Add(Item("Restart Message Hub", MainWindow.Restart));
-        return menu;
     }
+
+    MenuItem Toggle(string header, Func<bool> get, Action<bool> set) => Item(header, () =>
+    {
+        set(!get());
+        _host.SaveConfig();
+    }, get());
 
     static MenuItem AppMenu(string header, Action<PaneConfig?> choose)
     {
@@ -310,9 +363,9 @@ public sealed class Pane : Border
         return menu;
     }
 
-    static MenuItem Item(string header, Action action)
+    static MenuItem Item(string header, Action action, bool isChecked = false)
     {
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, IsChecked = isChecked };
         item.Click += (_, _) => action();
         return item;
     }
