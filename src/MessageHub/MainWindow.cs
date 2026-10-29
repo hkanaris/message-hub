@@ -296,9 +296,11 @@ public sealed class MainWindow : Window
     public async Task CheckForUpdatesAsync(bool manual)
     {
         if (_updating) return;
+        if (manual) Title = "Message Hub · checking for updates…";
         try
         {
             var latest = await Updater.GetLatestAsync();
+            UpdateTaskbar();
             if (latest == null || latest.Version <= Updater.Current)
             {
                 if (manual) MessageBox.Show(this, $"You're up to date (v{Updater.Current}).", "Message Hub");
@@ -321,12 +323,18 @@ public sealed class MainWindow : Window
             await Updater.InstallAsync(latest);
             Restart();
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException
-                                       or JsonException or KeyNotFoundException or TaskCanceledException)
+        catch (Exception ex)
         {
             _updating = false;
             UpdateTaskbar();
-            if (manual) MessageBox.Show(this, $"Couldn't check for updates.\n\n{ex.Message}", "Message Hub");
+            var reason = ex switch
+            {
+                TaskCanceledException => "GitHub didn't answer within 20 seconds. The network may be blocking api.github.com.",
+                HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound } =>
+                    "GitHub says the releases page doesn't exist. Is the message-hub repository public?",
+                _ => ex.Message,
+            };
+            if (manual) MessageBox.Show(this, $"Couldn't check for updates.\n\n{reason}", "Message Hub");
         }
     }
 

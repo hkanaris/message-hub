@@ -19,9 +19,11 @@ static class Updater
 
     static string ExePath => Environment.ProcessPath!;
 
+    // Gives up after 20 seconds, so a blocked or slow network can't leave a check hanging.
     public static async Task<Release?> GetLatestAsync()
     {
-        using var doc = JsonDocument.Parse(await Http.GetStringAsync(LatestRelease));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var doc = JsonDocument.Parse(await Http.GetStringAsync(LatestRelease, timeout.Token));
         var root = doc.RootElement;
         var tag = root.GetProperty("tag_name").GetString() ?? "";
         if (!Version.TryParse(tag.TrimStart('v'), out var version)) return null;
