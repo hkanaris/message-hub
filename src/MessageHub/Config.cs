@@ -201,6 +201,11 @@ public sealed class HubState
     public DateTime? SnoozedUntil { get; set; }
 
     public bool TrayHintShown { get; set; }
+
+    // The message feed: shown or not, its width when docked, and whether its own window stays on top.
+    public bool FeedVisible { get; set; } = true;
+    public double FeedWidth { get; set; } = 340;
+    public bool FeedOnTop { get; set; }
     public Dictionary<string, double> Zoom { get; set; } = new();
 
     static string FilePath { get; } = Path.Combine(HubConfig.Folder, "state.json");

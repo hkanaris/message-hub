@@ -36,6 +36,20 @@ public sealed class MainWindow : Window
     readonly TextBlock _alertText;
     readonly TrayIcon _tray = new();
 
+    // The message feed, docked in the right-hand column of _outer or in its own window.
+    readonly Grid _outer = new();
+    readonly FeedView _feed = new();
+    readonly GridSplitter _feedDivider = new()
+    {
+        ResizeDirection = GridResizeDirection.Columns,
+        ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+        HorizontalAlignment = HorizontalAlignment.Stretch,
+        Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3C)),
+        ShowsPreview = false,
+        ToolTip = "Drag to resize the feed",
+    };
+    FeedWindow? _feedWindow;
+
     // One pane per app across all layouts, keyed by Pane.Key.
     readonly Dictionary<string, Pane> _pool = new();
 
@@ -104,7 +118,34 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(_alertBar, Dock.Top);
         layout.Children.Add(_alertBar);
         layout.Children.Add(_grid);
-        Content = layout;
+
+        _outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        _outer.ColumnDefinitions.Add(new ColumnDefinition());
+        _outer.ColumnDefinitions.Add(new ColumnDefinition());
+        Grid.SetColumn(_feedDivider, 1);
+        _outer.Children.Add(layout);
+        _outer.Children.Add(_feedDivider);
+        Content = _outer;
+
+        _feedDivider.DragCompleted += (_, _) =>
+        {
+            _state.FeedWidth = Math.Round(_outer.ColumnDefinitions[2].ActualWidth);
+            SaveState();
+        };
+        _feed.ItemClicked += item =>
+        {
+            if (_pool.ContainsValue(item.Pane)) ShowPane(item.Pane, openLatest: item.Serial == item.Pane.LatestSerial);
+        };
+        _feed.HideRequested += () => SetFeedVisible(false);
+        _feed.PopOutRequested += ToggleFeedPopOut;
+        _feed.PinRequested += () =>
+        {
+            _state.FeedOnTop = !_state.FeedOnTop;
+            if (_feedWindow != null) _feedWindow.Topmost = _state.FeedOnTop;
+            _feed.SetPoppedOut(_feedWindow != null, _state.FeedOnTop);
+            SaveState();
+        };
+        ApplyFeed();
 
         _tray.OpenRequested += ShowFromTray;
         _tray.NotificationClicked += () =>
@@ -167,8 +208,58 @@ public sealed class MainWindow : Window
         Activate();
     }
 
+    public bool FeedVisible => _state.FeedVisible;
+
+    public void SetFeedVisible(bool visible)
+    {
+        _state.FeedVisible = visible;
+        if (!visible) _feedWindow?.CloseQuietly();
+        _feedWindow = visible ? _feedWindow : null;
+        ApplyFeed();
+        SaveState();
+    }
+
+    void ToggleFeedPopOut()
+    {
+        if (_feedWindow != null)
+        {
+            _feedWindow.Close();
+            return;
+        }
+
+        _outer.Children.Remove(_feed);
+        _feedWindow = new FeedWindow(_feed, _state.FeedOnTop);
+        _feedWindow.Returned += () =>
+        {
+            _feedWindow = null;
+            ApplyFeed();
+        };
+        _feedWindow.Show();
+        ApplyFeed();
+    }
+
+    // Docks the feed in the right-hand column, or empties that column when the feed is hidden or popped out.
+    void ApplyFeed()
+    {
+        var docked = _state.FeedVisible && _feedWindow == null;
+        _outer.ColumnDefinitions[1].Width = new GridLength(docked ? 5 : 0);
+        _outer.ColumnDefinitions[2].Width = new GridLength(docked ? Math.Max(_state.FeedWidth, 220) : 0);
+        _feedDivider.Visibility = docked ? Visibility.Visible : Visibility.Collapsed;
+
+        if (docked && _feed.Parent == null)
+        {
+            Grid.SetColumn(_feed, 2);
+            _outer.Children.Add(_feed);
+        }
+        else if (!docked && _feed.Parent == _outer)
+        {
+            _outer.Children.Remove(_feed);
+        }
+        _feed.SetPoppedOut(_feedWindow != null, _state.FeedOnTop);
+    }
+
     // Brings the window up on the pane's layout and opens its latest message.
-    void ShowPane(Pane pane)
+    void ShowPane(Pane pane, bool openLatest = true)
     {
         ShowFromTray();
         if (_poppedOut.TryGetValue(pane, out var window))
@@ -180,7 +271,17 @@ public sealed class MainWindow : Window
             var layout = _config.Layouts.FirstOrDefault(l => Keys(l).Any(k => k.Key == pane.Key));
             if (layout != null) SwitchLayout(layout);
         }
-        pane.OpenLatest();
+
+        if (openLatest)
+        {
+            pane.OpenLatest();
+        }
+        else
+        {
+            // An older message can't be opened directly; show the app so it can be found there.
+            pane.ClearAlert();
+            pane.Web.Focus();
+        }
     }
 
     // A null duration means until turned off; TimeSpan.Zero turns it off.
@@ -478,6 +579,17 @@ public sealed class MainWindow : Window
         pane.AddRequested += (p, app) => ReplacePane(p, app, keepOld: true);
         pane.MoveRequested += MovePane;
         pane.RemoveRequested += RemovePane;
+        pane.Notified += (p, title, body, fromCount) => _feed.Add(new FeedItem
+        {
+            Time = DateTime.Now,
+            Pane = p,
+            App = p.Title,
+            Color = p.Accent,
+            Sender = fromCount ? "" : title.Trim(),
+            Message = fromCount ? "New unread message" : body.Trim(),
+            Serial = p.LatestSerial,
+        });
+        pane.Seen += p => _feed.MarkRead(p);
         return pane;
     }
 
@@ -837,9 +949,15 @@ public sealed class MainWindow : Window
         if (vip && _config.ExpandOnVip && _panes.Contains(pane) && _expanded != pane) ToggleExpand(pane);
     }
 
-    // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back.
+    // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back, Ctrl+Shift+F shows or hides the feed.
     void OnKey(object sender, KeyEventArgs e)
     {
+        if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.F)
+        {
+            SetFeedVisible(!_state.FeedVisible);
+            e.Handled = true;
+            return;
+        }
         if (Keyboard.Modifiers != ModifierKeys.Control) return;
 
         if (e.Key is >= Key.D1 and <= Key.D9 && e.Key - Key.D1 < _panes.Count)
@@ -946,6 +1064,7 @@ public sealed class MainWindow : Window
         Quitting = true;
         SaveState();
         foreach (var window in _poppedOut.Values.ToList()) window.CloseQuietly();
+        _feedWindow?.CloseQuietly();
         _tray.Dispose();
     }
 }

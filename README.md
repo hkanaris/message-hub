@@ -10,6 +10,7 @@ Download `MessageHub.exe` from [the latest release](../../releases/latest), unbl
 
 - **New message:** the pane's header pulses in the app's colour, shows the message, the taskbar button flashes and a sound plays.
 - **Click a header** to jump to that message and clear the alert.
+- **Message feed:** a board down the right-hand side with every app's messages in order, newest first: app, sender, message and time. Click one to jump to it (it opens the chat when it's that app's latest message). Unread ones are highlighted until you look at that app; **✓** marks all read, and the dropdown filters by app. Pop it out into its own window (with a keep-on-top pin), drag its edge to resize, or hide it with **Ctrl+Shift+F**. It shows what the apps send as notifications and starts empty each time Message Hub starts.
 - **Layouts:** save different setups and switch between them, e.g. *Main* (Slack, WhatsApp, Teams, Claude stacked) and *Discord + ChatGPT* side by side. In the **⋯** menu, **Layout** lists your layouts; **New layout…** asks for a name, arrangement, number of apps and which apps. Rename and delete are there too. Apps in every layout keep running, so ones that aren't showing still alert: a red bar at the top says where, and clicking it takes you there.
 - **Arrange:** **Stacked**, **Side by side** or **Grid**, and 2–6 apps, for the layout you're in.
 - **Split:** **Split with** puts another app beside a pane in the same row (in the same column when side by side), with a divider between them. **Unsplit** gives a pane its own row again.

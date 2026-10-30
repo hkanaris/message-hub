@@ -57,6 +57,10 @@ public sealed class Pane : Border
     // Identifies the app across layouts; layouts that share an app share its pane.
     public string Key { get; }
     public PaneConfig Config => _config;
+    public Color Accent => _accent;
+
+    // Goes up with each notification, so the feed can tell whether an entry is still the newest.
+    public int LatestSerial { get; private set; }
     public string LatestText => _preview.Text;
     // The app's name, plus its sign-in profile when it has one, so two accounts can be told apart.
     public string Title => string.IsNullOrEmpty(_config.Profile) ? _config.Name : $"{_config.Name} · {_config.Profile}";
@@ -66,6 +70,10 @@ public sealed class Pane : Border
     public event Action<Pane, bool>? Alerted;
     public event Action<Pane>? ExpandRequested;
     public event Action? StateChanged;
+
+    // Every notification (title, body, fromCount), for the feed; and when the pane has been looked at.
+    public event Action<Pane, string, string, bool>? Notified;
+    public event Action<Pane>? Seen;
 
     // A null config means "ask for a custom app".
     public event Action<Pane, PaneConfig?>? SwitchRequested;
@@ -226,6 +234,7 @@ public sealed class Pane : Border
         if (_hasLatest) _ = Web.ExecuteScriptAsync("window.__hubOpenLast && window.__hubOpenLast()");
         _hasLatest = false;
         Web.Focus();
+        Seen?.Invoke(this);
     }
 
     void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -255,7 +264,11 @@ public sealed class Pane : Border
                     break;
                 case "focus":
                     _pageFocused = root.GetProperty("value").GetBoolean();
-                    if (_pageFocused) ClearAlert();
+                    if (_pageFocused)
+                    {
+                        ClearAlert();
+                        Seen?.Invoke(this);
+                    }
                     break;
             }
         }
@@ -273,6 +286,8 @@ public sealed class Pane : Border
         // A count-only alert has no notification to open, so a click mustn't open an older one.
         _hasLatest = !fromCount;
         if (!fromCount) _lastNotification = DateTime.Now;
+        LatestSerial++;
+        Notified?.Invoke(this, title, body, fromCount);
 
         var vip = _hub.VipKeywords.Any(k => !string.IsNullOrWhiteSpace(k) && text.Contains(k, StringComparison.OrdinalIgnoreCase));
         var alertOn = _config.AlertOn.ToLowerInvariant();
@@ -433,6 +448,7 @@ public sealed class Pane : Border
         delete.IsEnabled = _hub.Layouts.Count > 1;
         layouts.Items.Add(delete);
         menu.Items.Add(layouts);
+        menu.Items.Add(Item("Show message feed (Ctrl+Shift+F)", () => _host.SetFeedVisible(!_host.FeedVisible), _host.FeedVisible));
 
         var arrange = new MenuItem { Header = "Arrange" };
         foreach (var (label, value) in LayoutChoices.Arrangements)
