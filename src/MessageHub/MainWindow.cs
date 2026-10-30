@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -36,19 +37,12 @@ public sealed class MainWindow : Window
     readonly TextBlock _alertText;
     readonly TrayIcon _tray = new();
 
-    // The message feed, docked in the right-hand column of _outer or in its own window.
-    readonly Grid _outer = new();
+    // The message feed: a panel that pops up over the panes on demand, or its own window.
     readonly FeedView _feed = new();
-    readonly GridSplitter _feedDivider = new()
-    {
-        ResizeDirection = GridResizeDirection.Columns,
-        ResizeBehavior = GridResizeBehavior.PreviousAndNext,
-        HorizontalAlignment = HorizontalAlignment.Stretch,
-        Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3C)),
-        ShowsPreview = false,
-        ToolTip = "Drag to resize the feed",
-    };
+    readonly Border _feedFrame;
+    readonly Popup _feedPopup;
     FeedWindow? _feedWindow;
+    DateTime _feedClosedAt;
 
     // One pane per app across all layouts, keyed by Pane.Key.
     readonly Dictionary<string, Pane> _pool = new();
@@ -119,24 +113,39 @@ public sealed class MainWindow : Window
         layout.Children.Add(_alertBar);
         layout.Children.Add(_grid);
 
-        _outer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        _outer.ColumnDefinitions.Add(new ColumnDefinition());
-        _outer.ColumnDefinitions.Add(new ColumnDefinition());
-        Grid.SetColumn(_feedDivider, 1);
-        _outer.Children.Add(layout);
-        _outer.Children.Add(_feedDivider);
-        Content = _outer;
+        Content = layout;
 
-        _feedDivider.DragCompleted += (_, _) =>
+        _feedFrame = new Border
         {
-            _state.FeedWidth = Math.Round(_outer.ColumnDefinitions[2].ActualWidth);
-            SaveState();
+            Width = 380,
+            CornerRadius = new CornerRadius(8),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x44, 0x44, 0x4A)),
+            BorderThickness = new Thickness(1),
+            Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22)),
+            Margin = new Thickness(0, 4, 12, 12),
+            Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 16, ShadowDepth = 2, Opacity = 0.5 },
+            Child = _feed,
         };
+        _feedPopup = new Popup
+        {
+            Child = _feedFrame,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            PopupAnimation = PopupAnimation.Fade,
+        };
+        Deactivated += (_, _) => _feedPopup.IsOpen = false;
+        _feedPopup.Closed += (_, _) => _feedClosedAt = DateTime.Now;
+
         _feed.ItemClicked += item =>
         {
+            _feedPopup.IsOpen = false;
             if (_pool.ContainsValue(item.Pane)) ShowPane(item.Pane, openLatest: item.Serial == item.Pane.LatestSerial);
         };
-        _feed.HideRequested += () => SetFeedVisible(false);
+        _feed.HideRequested += () =>
+        {
+            if (_feedWindow != null) _feedWindow.Close();
+            else _feedPopup.IsOpen = false;
+        };
         _feed.PopOutRequested += ToggleFeedPopOut;
         _feed.PinRequested += () =>
         {
@@ -145,7 +154,7 @@ public sealed class MainWindow : Window
             _feed.SetPoppedOut(_feedWindow != null, _state.FeedOnTop);
             SaveState();
         };
-        ApplyFeed();
+        _feed.SetPoppedOut(false, _state.FeedOnTop);
 
         _tray.OpenRequested += ShowFromTray;
         _tray.NotificationClicked += () =>
@@ -208,15 +217,39 @@ public sealed class MainWindow : Window
         Activate();
     }
 
-    public bool FeedVisible => _state.FeedVisible;
-
-    public void SetFeedVisible(bool visible)
+    // Opens the feed under the button that asked for it, or at the top right of the window.
+    public void ShowFeed(UIElement? anchor = null)
     {
-        _state.FeedVisible = visible;
-        if (!visible) _feedWindow?.CloseQuietly();
-        _feedWindow = visible ? _feedWindow : null;
-        ApplyFeed();
-        SaveState();
+        if (_feedWindow != null)
+        {
+            _feedWindow.Activate();
+            return;
+        }
+        if (_feedPopup.IsOpen)
+        {
+            _feedPopup.IsOpen = false;
+            return;
+        }
+
+        // Clicking the button while the feed is open closes it first; don't reopen it straight away.
+        if (DateTime.Now - _feedClosedAt < TimeSpan.FromMilliseconds(300)) return;
+
+        _feedFrame.Height = Math.Max(300, Math.Min(680, ActualHeight - 80));
+        if (anchor is FrameworkElement button)
+        {
+            _feedPopup.PlacementTarget = button;
+            _feedPopup.Placement = PlacementMode.Bottom;
+            _feedPopup.HorizontalOffset = button.ActualWidth - _feedFrame.Width;
+            _feedPopup.VerticalOffset = 0;
+        }
+        else
+        {
+            _feedPopup.PlacementTarget = this;
+            _feedPopup.Placement = PlacementMode.Relative;
+            _feedPopup.HorizontalOffset = ActualWidth - _feedFrame.Width - 40;
+            _feedPopup.VerticalOffset = 40;
+        }
+        _feedPopup.IsOpen = true;
     }
 
     void ToggleFeedPopOut()
@@ -227,35 +260,17 @@ public sealed class MainWindow : Window
             return;
         }
 
-        _outer.Children.Remove(_feed);
+        _feedPopup.IsOpen = false;
+        _feedFrame.Child = null;
         _feedWindow = new FeedWindow(_feed, _state.FeedOnTop);
         _feedWindow.Returned += () =>
         {
             _feedWindow = null;
-            ApplyFeed();
+            _feedFrame.Child = _feed;
+            _feed.SetPoppedOut(false, _state.FeedOnTop);
         };
+        _feed.SetPoppedOut(true, _state.FeedOnTop);
         _feedWindow.Show();
-        ApplyFeed();
-    }
-
-    // Docks the feed in the right-hand column, or empties that column when the feed is hidden or popped out.
-    void ApplyFeed()
-    {
-        var docked = _state.FeedVisible && _feedWindow == null;
-        _outer.ColumnDefinitions[1].Width = new GridLength(docked ? 5 : 0);
-        _outer.ColumnDefinitions[2].Width = new GridLength(docked ? Math.Max(_state.FeedWidth, 220) : 0);
-        _feedDivider.Visibility = docked ? Visibility.Visible : Visibility.Collapsed;
-
-        if (docked && _feed.Parent == null)
-        {
-            Grid.SetColumn(_feed, 2);
-            _outer.Children.Add(_feed);
-        }
-        else if (!docked && _feed.Parent == _outer)
-        {
-            _outer.Children.Remove(_feed);
-        }
-        _feed.SetPoppedOut(_feedWindow != null, _state.FeedOnTop);
     }
 
     // Brings the window up on the pane's layout and opens its latest message.
@@ -953,12 +968,12 @@ public sealed class MainWindow : Window
         if (vip && _config.ExpandOnVip && _panes.Contains(pane) && _expanded != pane) ToggleExpand(pane);
     }
 
-    // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back, Ctrl+Shift+F shows or hides the feed.
+    // Ctrl+1..9 expands that pane, Ctrl+0 puts them all back, Ctrl+Shift+F opens or closes the feed.
     void OnKey(object sender, KeyEventArgs e)
     {
         if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.F)
         {
-            SetFeedVisible(!_state.FeedVisible);
+            ShowFeed();
             e.Handled = true;
             return;
         }

@@ -202,9 +202,7 @@ public sealed class HubState
 
     public bool TrayHintShown { get; set; }
 
-    // The message feed: shown or not, its width when docked, and whether its own window stays on top.
-    public bool FeedVisible { get; set; } = true;
-    public double FeedWidth { get; set; } = 340;
+    // Whether the message feed's own window stays on top.
     public bool FeedOnTop { get; set; }
     public Dictionary<string, double> Zoom { get; set; } = new();
 

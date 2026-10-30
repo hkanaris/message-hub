@@ -27,7 +27,7 @@ public sealed class FeedItem
 // The message board: messages from every app that still need attention, newest first. An entry
 // goes when the app withdraws its notification (read or replied to), when a newer message in the
 // same conversation replaces it, when the app's unread count reaches zero, or when it's clicked
-// or dismissed. Docked beside the panes or popped out into its own window.
+// or dismissed. Pops up over the panes, or lives in its own window.
 public sealed class FeedView : DockPanel
 {
     const int Limit = 300;
@@ -60,7 +60,7 @@ public sealed class FeedView : DockPanel
 
     public FeedView()
     {
-        Background = new SolidColorBrush(Color.FromRgb(0x1F, 0x1F, 0x22));
+        Background = Brushes.Transparent;
         MinWidth = 220;
 
         _popButton = IconButton("", "Pop out to its own window", () => PopOutRequested?.Invoke());
@@ -71,7 +71,7 @@ public sealed class FeedView : DockPanel
         buttons.Children.Add(IconButton("\uE74D", "Clear all", ClearAll));
         buttons.Children.Add(_pinButton);
         buttons.Children.Add(_popButton);
-        buttons.Children.Add(IconButton("", "Hide the feed (Ctrl+Shift+F)", () => HideRequested?.Invoke()));
+        buttons.Children.Add(IconButton("", "Close", () => HideRequested?.Invoke()));
 
         var header = new DockPanel { Margin = new Thickness(12, 8, 4, 8) };
         DockPanel.SetDock(buttons, Dock.Right);
@@ -97,7 +97,7 @@ public sealed class FeedView : DockPanel
     public void SetPoppedOut(bool poppedOut, bool onTop)
     {
         _popButton.Text = poppedOut ? "" : "";
-        _popButton.ToolTip = poppedOut ? "Put back beside the panes" : "Pop out to its own window";
+        _popButton.ToolTip = poppedOut ? "Put back in the hub" : "Pop out to its own window";
         _pinButton.Visibility = poppedOut ? Visibility.Visible : Visibility.Collapsed;
         _pinButton.Opacity = onTop ? 1 : 0.6;
         _pinButton.ToolTip = onTop ? "Stop keeping on top" : "Keep on top";
@@ -265,7 +265,7 @@ public sealed class FeedView : DockPanel
     }
 }
 
-// The feed in its own window. Closing it docks the feed back beside the panes.
+// The feed in its own window. Closing it puts the feed back as the hub's pop-up.
 public sealed class FeedWindow : Window
 {
     bool _quiet;

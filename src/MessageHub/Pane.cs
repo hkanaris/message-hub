@@ -141,6 +141,9 @@ public sealed class Pane : Border
         var menu = new ContextMenu();
         FillMenu(menu);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        TextBlock? feedButton = null;
+        feedButton = IconButton("\uE715", "Message feed (Ctrl+Shift+F)", () => _host.ShowFeed(feedButton));
+        buttons.Children.Add(feedButton);
         buttons.Children.Add(IconButton("\uE712", "Apps and options", () =>
         {
             FillMenu(menu);
@@ -451,7 +454,7 @@ public sealed class Pane : Border
         delete.IsEnabled = _hub.Layouts.Count > 1;
         layouts.Items.Add(delete);
         menu.Items.Add(layouts);
-        menu.Items.Add(Item("Show message feed (Ctrl+Shift+F)", () => _host.SetFeedVisible(!_host.FeedVisible), _host.FeedVisible));
+        menu.Items.Add(Item("Message feed (Ctrl+Shift+F)", () => _host.ShowFeed()));
 
         var arrange = new MenuItem { Header = "Arrange" };
         foreach (var (label, value) in LayoutChoices.Arrangements)
