@@ -71,9 +71,11 @@ public sealed class Pane : Border
     public event Action<Pane>? ExpandRequested;
     public event Action? StateChanged;
 
-    // Every notification (title, body, fromCount), for the feed; and when the pane has been looked at.
-    public event Action<Pane, string, string, bool>? Notified;
-    public event Action<Pane>? Seen;
+    // For the feed: each notification, the app withdrawing one (usually because it was read), and the
+    // unread count reaching zero.
+    public event Action<Pane, Notice>? Notified;
+    public event Action<Pane, int>? NoticeClosed;
+    public event Action<Pane>? AllRead;
 
     // A null config means "ask for a custom app".
     public event Action<Pane, PaneConfig?>? SwitchRequested;
@@ -234,7 +236,6 @@ public sealed class Pane : Border
         if (_hasLatest) _ = Web.ExecuteScriptAsync("window.__hubOpenLast && window.__hubOpenLast()");
         _hasLatest = false;
         Web.Focus();
-        Seen?.Invoke(this);
     }
 
     void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -260,15 +261,16 @@ public sealed class Pane : Border
                     OnNotification(
                         root.GetProperty("title").GetString() ?? "",
                         root.GetProperty("body").GetString() ?? "",
-                        root.TryGetProperty("test", out var test) && test.ValueKind == JsonValueKind.True);
+                        root.TryGetProperty("test", out var test) && test.ValueKind == JsonValueKind.True,
+                        id: root.TryGetProperty("id", out var id) && id.TryGetInt32(out var n) ? n : null,
+                        tag: root.TryGetProperty("tag", out var tag) ? tag.GetString() : null);
+                    break;
+                case "closed":
+                    if (root.GetProperty("id").TryGetInt32(out var closed)) NoticeClosed?.Invoke(this, closed);
                     break;
                 case "focus":
                     _pageFocused = root.GetProperty("value").GetBoolean();
-                    if (_pageFocused)
-                    {
-                        ClearAlert();
-                        Seen?.Invoke(this);
-                    }
+                    if (_pageFocused) ClearAlert();
                     break;
             }
         }
@@ -278,7 +280,7 @@ public sealed class Pane : Border
     }
 
     // fromCount: raised by the unread count going up, with no notification to open.
-    void OnNotification(string title, string body, bool test, bool fromCount = false)
+    void OnNotification(string title, string body, bool test, bool fromCount = false, int? id = null, string? tag = null)
     {
         var text = string.IsNullOrWhiteSpace(body) ? title : $"{title}: {body}";
         _preview.Text = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -287,7 +289,7 @@ public sealed class Pane : Border
         _hasLatest = !fromCount;
         if (!fromCount) _lastNotification = DateTime.Now;
         LatestSerial++;
-        Notified?.Invoke(this, title, body, fromCount);
+        Notified?.Invoke(this, new Notice(title.Trim(), body.Trim(), fromCount, id, string.IsNullOrEmpty(tag) ? null : tag, LatestSerial));
 
         var vip = _hub.VipKeywords.Any(k => !string.IsNullOrWhiteSpace(k) && text.Contains(k, StringComparison.OrdinalIgnoreCase));
         var alertOn = _config.AlertOn.ToLowerInvariant();
@@ -326,6 +328,7 @@ public sealed class Pane : Border
             : title.StartsWith('*') || title.StartsWith('!') ? -1
             : 0;
         if (count == Unread) return;
+        if (count == 0) AllRead?.Invoke(this);
 
         // A rise with no notification around it alerts anyway, a few seconds later. Compare with the
         // highest recent count, so a title that flickers (1, 0, 1) isn't taken for new messages; a
@@ -563,3 +566,6 @@ public sealed class Pane : Border
         }
     }
 }
+
+// One notification as the feed sees it. Id and Tag come from the app; Serial is the pane's count.
+public sealed record Notice(string Title, string Body, bool FromCount, int? Id, string? Tag, int Serial);

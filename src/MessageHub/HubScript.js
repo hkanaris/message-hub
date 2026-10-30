@@ -1,6 +1,8 @@
 // Injected into every pane before the page's own scripts run.
 // Replaces the browser's Notification API so each app's notifications come to
-// Message Hub instead of Windows, and reports when the page has focus.
+// Message Hub instead of Windows, and reports when the page has focus. Each
+// notification has an id, and the app closing it (usually because the chat was
+// read) is reported too, so the hub's feed can drop it.
 (() => {
   if (window.__hubInstalled || window.top !== window) return;
   window.__hubInstalled = true;
@@ -10,6 +12,7 @@
   };
 
   let last = null;
+  let nextId = 1;
 
   class HubNotification extends EventTarget {
     constructor(title, options) {
@@ -21,8 +24,12 @@
       this.data = options.data ?? null;
       this.icon = options.icon ?? '';
       this.onclick = this.onclose = this.onshow = this.onerror = null;
+      this.__id = nextId++;
       last = this;
-      send({ type: 'notification', title: this.title, body: this.body, test: this.tag === '__hub_test' });
+      send({
+        type: 'notification', id: this.__id, tag: String(this.tag), title: this.title, body: this.body,
+        test: this.tag === '__hub_test',
+      });
       setTimeout(() => this.__fire('show'), 0);
     }
 
@@ -36,7 +43,10 @@
     }
 
     close() {
+      if (this.__closed) return;
+      this.__closed = true;
       if (last === this) last = null;
+      send({ type: 'closed', id: this.__id });
       this.__fire('close');
     }
 
@@ -58,14 +68,32 @@
     last = null;
   };
 
+  // Notifications shown through a service worker registration. Apps close these by asking
+  // getNotifications() for them, so keep the open ones.
   if (window.ServiceWorkerRegistration) {
+    const shown = [];
     ServiceWorkerRegistration.prototype.showNotification = function (title, options) {
+      options = options || {};
       last = null; // nothing to click for these, so don't reopen an older one
-      send({ type: 'notification', title: String(title ?? ''), body: String((options && options.body) ?? '') });
+      const tag = String(options.tag ?? '');
+      for (let i = shown.length - 1; i >= 0; i--) {
+        if (tag && shown[i].tag === tag) shown.splice(i, 1);
+      }
+      const note = {
+        id: nextId++, tag, title: String(title ?? ''), body: String(options.body ?? ''), data: options.data ?? null,
+        close() {
+          const i = shown.indexOf(note);
+          if (i >= 0) shown.splice(i, 1);
+          send({ type: 'closed', id: note.id });
+        },
+      };
+      shown.push(note);
+      send({ type: 'notification', id: note.id, tag, title: note.title, body: note.body });
       return Promise.resolve();
     };
-    ServiceWorkerRegistration.prototype.getNotifications = function () {
-      return Promise.resolve([]);
+    ServiceWorkerRegistration.prototype.getNotifications = function (filter) {
+      const tag = filter && filter.tag;
+      return Promise.resolve(shown.filter((n) => !tag || n.tag === tag));
     };
   }
 

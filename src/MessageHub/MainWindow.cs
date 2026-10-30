@@ -546,6 +546,7 @@ public sealed class MainWindow : Window
             _pool.Remove(key);
             if (_poppedOut.Remove(pane, out var window)) window.CloseQuietly();
             Detach(pane);
+            _feed.Clear(pane);
             pane.Close();
         }
 
@@ -579,17 +580,20 @@ public sealed class MainWindow : Window
         pane.AddRequested += (p, app) => ReplacePane(p, app, keepOld: true);
         pane.MoveRequested += MovePane;
         pane.RemoveRequested += RemovePane;
-        pane.Notified += (p, title, body, fromCount) => _feed.Add(new FeedItem
+        pane.Notified += (p, notice) => _feed.Add(new FeedItem
         {
             Time = DateTime.Now,
             Pane = p,
             App = p.Title,
             Color = p.Accent,
-            Sender = fromCount ? "" : title.Trim(),
-            Message = fromCount ? "New unread message" : body.Trim(),
-            Serial = p.LatestSerial,
+            Sender = notice.FromCount ? "" : notice.Title,
+            Message = notice.FromCount ? "New unread message" : notice.Body,
+            Serial = notice.Serial,
+            NoticeId = notice.Id,
+            Tag = notice.Tag,
         });
-        pane.Seen += p => _feed.MarkRead(p);
+        pane.NoticeClosed += (p, id) => _feed.Remove(p, id);
+        pane.AllRead += p => _feed.Clear(p);
         return pane;
     }
 

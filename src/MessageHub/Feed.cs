@@ -5,7 +5,7 @@ using System.Windows.Media;
 
 namespace MessageHub;
 
-// One message on the feed: what an app's notification said, and when.
+// One message waiting on the feed: what an app's notification said, and when.
 public sealed class FeedItem
 {
     public required DateTime Time { get; init; }
@@ -17,17 +17,23 @@ public sealed class FeedItem
 
     // Matches Pane.LatestSerial while this is the newest notification the pane can still open.
     public required int Serial { get; init; }
-    public bool Read { get; set; }
+
+    // The app's id for the notification, so it can be dropped when the app withdraws it, and its tag:
+    // apps give each conversation one tag, so a newer message replaces the older entry.
+    public int? NoticeId { get; init; }
+    public string? Tag { get; init; }
 }
 
-// The message board: every app's notifications in one list, newest first. Docked beside the
-// panes or popped out into its own window.
+// The message board: messages from every app that still need attention, newest first. An entry
+// goes when the app withdraws its notification (read or replied to), when a newer message in the
+// same conversation replaces it, when the app's unread count reaches zero, or when it's clicked
+// or dismissed. Docked beside the panes or popped out into its own window.
 public sealed class FeedView : DockPanel
 {
     const int Limit = 300;
     const string AllApps = "All apps";
 
-    static readonly Brush Unread = new SolidColorBrush(Color.FromRgb(0x2A, 0x2D, 0x3A));
+    static readonly Brush Normal = new SolidColorBrush(Color.FromRgb(0x2A, 0x2D, 0x3A));
     static readonly Brush Hover = new SolidColorBrush(Color.FromRgb(0x33, 0x36, 0x44));
     static readonly Brush Muted = new SolidColorBrush(Color.FromRgb(0x9A, 0x9A, 0xA0));
     static readonly Brush Body = new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xC8));
@@ -38,7 +44,7 @@ public sealed class FeedView : DockPanel
     readonly ComboBox _filter = new() { Margin = new Thickness(10, 0, 10, 8) };
     readonly TextBlock _empty = new()
     {
-        Text = "New messages from every app will appear here, newest first.",
+        Text = "Nothing waiting. New messages from every app appear here until they're read.",
         Foreground = Muted,
         TextWrapping = TextWrapping.Wrap,
         Margin = new Thickness(12),
@@ -50,9 +56,7 @@ public sealed class FeedView : DockPanel
     public event Action? PopOutRequested;
     public event Action? HideRequested;
     public event Action? PinRequested;
-    public event Action? UnreadChanged;
-
-    public int UnreadCount => _items.Count(i => !i.Read);
+    public int Count => _items.Count;
 
     public FeedView()
     {
@@ -64,7 +68,7 @@ public sealed class FeedView : DockPanel
         _pinButton.Visibility = Visibility.Collapsed;
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
-        buttons.Children.Add(IconButton("", "Mark all as read", MarkAllRead));
+        buttons.Children.Add(IconButton("\uE74D", "Clear all", ClearAll));
         buttons.Children.Add(_pinButton);
         buttons.Children.Add(_popButton);
         buttons.Children.Add(IconButton("", "Hide the feed (Ctrl+Shift+F)", () => HideRequested?.Invoke()));
@@ -101,32 +105,35 @@ public sealed class FeedView : DockPanel
 
     public void Add(FeedItem item)
     {
+        if (item.Tag != null) _items.RemoveAll(i => i.Pane == item.Pane && i.Tag == item.Tag);
         _items.Insert(0, item);
         if (_items.Count > Limit) _items.RemoveAt(_items.Count - 1);
         if (!_filter.Items.Contains(item.App)) _filter.Items.Add(item.App);
         Render();
-        UnreadChanged?.Invoke();
     }
 
-    // Everything from that pane counts as read once you've looked at it.
-    public void MarkRead(Pane pane)
+    // The app withdrew this notification, usually because the message was read.
+    public void Remove(Pane pane, int noticeId)
     {
-        var changed = false;
-        foreach (var item in _items.Where(i => i.Pane == pane && !i.Read))
-        {
-            item.Read = true;
-            changed = true;
-        }
-        if (!changed) return;
-        Render();
-        UnreadChanged?.Invoke();
+        if (_items.RemoveAll(i => i.Pane == pane && i.NoticeId == noticeId) > 0) Render();
     }
 
-    void MarkAllRead()
+    // Nothing unread in that app any more, or the app was closed.
+    public void Clear(Pane pane)
     {
-        foreach (var item in _items) item.Read = true;
+        if (_items.RemoveAll(i => i.Pane == pane) > 0) Render();
+    }
+
+    void ClearAll()
+    {
+        _items.Clear();
         Render();
-        UnreadChanged?.Invoke();
+    }
+
+    void Dismiss(FeedItem item)
+    {
+        _items.Remove(item);
+        Render();
     }
 
     void Render()
@@ -137,8 +144,7 @@ public sealed class FeedView : DockPanel
         _list.Children.Clear();
         foreach (var item in shown) _list.Children.Add(Entry(item));
 
-        var unread = UnreadCount;
-        _title.Text = unread > 0 ? $"Feed ({unread} new)" : "Feed";
+        _title.Text = _items.Count > 0 ? $"Feed ({_items.Count})" : "Feed";
         _empty.Visibility = shown.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -153,8 +159,26 @@ public sealed class FeedView : DockPanel
             FontSize = 11,
             HorizontalAlignment = HorizontalAlignment.Right,
         };
+        var dismiss = new TextBlock
+        {
+            Text = "\uE711",
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            FontSize = 10,
+            Foreground = Muted,
+            Margin = new Thickness(8, 1, 0, 0),
+            ToolTip = "Dismiss",
+            Visibility = Visibility.Hidden,
+        };
+        dismiss.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            Dismiss(item);
+        };
+
         var top = new DockPanel();
+        DockPanel.SetDock(dismiss, Dock.Right);
         DockPanel.SetDock(time, Dock.Right);
+        top.Children.Add(dismiss);
         top.Children.Add(time);
         top.Children.Add(app);
 
@@ -166,7 +190,7 @@ public sealed class FeedView : DockPanel
             {
                 Text = item.Sender,
                 Foreground = Brushes.White,
-                FontWeight = item.Read ? FontWeights.Normal : FontWeights.SemiBold,
+                FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 2, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis,
             });
@@ -185,7 +209,7 @@ public sealed class FeedView : DockPanel
             });
         }
 
-        var background = item.Read ? Brushes.Transparent : Unread;
+        var background = Normal;
         var entry = new Border
         {
             Background = background,
@@ -194,17 +218,24 @@ public sealed class FeedView : DockPanel
             Padding = new Thickness(10, 7, 10, 8),
             Margin = new Thickness(0, 0, 0, 1),
             Cursor = Cursors.Hand,
-            ToolTip = item.Sender.Length > 0 ? $"{item.Sender}: {item.Message}" : item.Message,
+            ToolTip = item.Sender.Length > 0 && item.Message.Length > 0 ? $"{item.Sender}: {item.Message}" : item.Sender + item.Message,
             Child = text,
         };
-        entry.MouseEnter += (_, _) => entry.Background = Hover;
-        entry.MouseLeave += (_, _) => entry.Background = background;
+        entry.MouseEnter += (_, _) =>
+        {
+            entry.Background = Hover;
+            dismiss.Visibility = Visibility.Visible;
+        };
+        entry.MouseLeave += (_, _) =>
+        {
+            entry.Background = background;
+            dismiss.Visibility = Visibility.Hidden;
+        };
         entry.MouseLeftButtonUp += (_, _) =>
         {
-            item.Read = true;
+            _items.Remove(item);
             ItemClicked?.Invoke(item);
             Render();
-            UnreadChanged?.Invoke();
         };
         return entry;
     }
